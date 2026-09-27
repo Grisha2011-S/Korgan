@@ -1,0 +1,6 @@
+{
+  "name": "Қорған",
+  "description": "Қорған — құлауды анықтайтын, шұғыл SMS және GPS координаттарын автоматты жіберетін смарт қауіпсіздік қосымшасы (ESP32-C3 BLE).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
