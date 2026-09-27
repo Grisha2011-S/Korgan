@@ -7,7 +7,8 @@ Android-приложение для мониторинга датчика пад
 ## Скачать
 
 <p align="center">
-	<a href="https://github.com/Grisha2011-S/Korgan/releases/latest/download/Korgan.apk"><strong>Скачать Қорған для Android</strong></a>
+
+	<a href="https://github.com/Grisha2011-S/Korgan/app\build\outputs\apk\debug\Korgan.apk"><strong>Скачать Қорған для Android</strong></a>
 </p>
 
 После скачивания откройте файл `Korgan.apk` на Android-устройстве и подтвердите установку. Если Android запросит разрешение на установку приложений из этого источника, разрешите его для браузера или файлового менеджера.
