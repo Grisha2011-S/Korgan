@@ -4,7 +4,7 @@ Android-приложение для мониторинга датчика пад
 
 ## Скачать
 
-[Скачать Қорған для Android](https://github.com/Grisha2011-S/Korgan/releases/latest/download/Korgan.apk)
+[Скачать Қорған для Android](https://github.com/Grisha2011-S/Korgan/raw/main/download/Korgan.apk)
 
 [Скачать 3D-модели в STEP](https://github.com/Grisha2011-S/Korgan/raw/main/models/Korgan_3D_STEP.zip)
 
