@@ -1,4 +1,3 @@
-"""Push delivery through Firebase Cloud Messaging (HTTP v1), Android + iOS."""
 from __future__ import annotations
 
 import json
@@ -12,7 +11,6 @@ FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 
 
 class Pusher:
-    """Sends a push to one device token. Falls back to dry-run when no key is configured."""
 
     def __init__(self, service_account: Path):
         self._session = None
@@ -51,8 +49,6 @@ class Pusher:
         message: dict = {
             "token": token,
             "data": {k: str(v) for k, v in data.items()},
-            # Android: data-only + high priority wakes the app even in Doze;
-            # the app itself shows the full-screen alarm.
             "android": {"priority": "HIGH", "ttl": "600s"},
         }
         if platform == "ios":
@@ -63,7 +59,7 @@ class Pusher:
         url = f"https://fcm.googleapis.com/v1/projects/{self._project_id}/messages:send"
         try:
             resp = self._session.post(url, json={"message": message}, timeout=10)
-        except Exception as exc:  # network error: report as not delivered
+        except Exception as exc:
             log.error("FCM request failed: %s", exc)
             return False
         if resp.status_code == 200:

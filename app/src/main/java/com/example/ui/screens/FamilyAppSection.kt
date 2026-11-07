@@ -52,7 +52,6 @@ import com.example.ui.theme.PrimaryBlue
 import com.example.ui.theme.StatusConnected
 import kotlinx.coroutines.launch
 
-/** Настройки телефона с браслетом: сервер, связка с родственниками по коду, способ оповещения. */
 @Composable
 fun FamilyAppSection(cloud: FamilyCloud, text: FamilyStrings) {
     val state by cloud.state.collectAsStateWithLifecycle()

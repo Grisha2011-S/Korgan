@@ -147,7 +147,6 @@ fun HistoryScreen(
     }
 }
 
-/** Компактная строка события; подробности (телефон, текст звонка) — по нажатию. */
 @Composable
 fun EventCard(event: AlertEvent, strings: com.example.i18n.Translations) {
     val dateFormat = remember { SimpleDateFormat("dd.MM  HH:mm", Locale.getDefault()) }

@@ -54,7 +54,6 @@ import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.StatusConnected
 import kotlinx.coroutines.launch
 
-/** Полноэкранная тревога на телефоне родственника: громкий сигнал и кнопка «Я еду». */
 class CaregiverAlertActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -111,7 +110,6 @@ class CaregiverAlertActivity : ComponentActivity() {
             }.format(alert.wearerName)
         }
 
-        /** Будит телефон, включает сигнал и показывает тревогу поверх экрана блокировки. */
         fun show(context: Context, alert: RemoteAlert) {
             runCatching {
                 val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -172,7 +170,6 @@ class CaregiverAlertActivity : ComponentActivity() {
             runCatching {
                 context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }.onFailure {
-                // Нет приложения карт: открываем в браузере.
                 val web = if (lat != null && lon != null) {
                     "https://maps.google.com/?q=$lat,$lon"
                 } else {

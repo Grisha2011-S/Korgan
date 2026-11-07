@@ -54,10 +54,6 @@ import com.example.data.isValidPhoneNumber
 import com.example.i18n.AppStrings
 import com.example.ui.theme.PrimaryBlue
 
-/**
- * Обязательная первичная настройка: имя пользователя и хотя бы один
- * корректный номер получателя SMS. Закрыть экран без заполнения нельзя.
- */
 @Composable
 fun ProfileOnboardingDialog(
     initialName: String,

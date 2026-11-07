@@ -1,6 +1,5 @@
 package com.example.i18n
 
-/** Тексты режима «семья»: выбор роли, телефон родственника, оповещение через сервер. */
 data class FamilyStrings(
     val roleTitle: String,
     val roleWearerTitle: String,

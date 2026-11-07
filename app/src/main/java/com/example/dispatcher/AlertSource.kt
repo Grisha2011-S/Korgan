@@ -1,6 +1,5 @@
 package com.example.dispatcher
 
-/** Источники тревоги. Значения ESP32_* должны совпадать с протоколом прошивки. */
 object AlertSource {
     const val ESP32_FALL = "ESP32_BLE"
     const val ESP32_SOS = "ESP32_SOS"

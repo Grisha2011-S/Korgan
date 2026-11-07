@@ -114,7 +114,6 @@ private const val FRESH_ALERT_MS = 10 * 60_000L
 
 private data class CaregiverTab(val title: String, val icon: ImageVector, val selectedIcon: ImageVector)
 
-/** Всё приложение в режиме «Я слежу за близким». */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CaregiverAppScreen(viewModel: MainViewModel) {
@@ -196,10 +195,6 @@ fun CaregiverAppScreen(viewModel: MainViewModel) {
     }
 }
 
-/**
- * Пока экран открыт, опрашивает сервер. Без настроенного push это единственный
- * способ узнать о тревоге, поэтому свежая тревога сразу открывается на весь экран.
- */
 @Composable
 private fun InboxPolling(cloud: FamilyCloud, pushAvailable: Boolean) {
     val context = LocalContext.current
@@ -302,7 +297,6 @@ private fun AlertsTab(cloud: FamilyCloud, text: FamilyStrings) {
         }
     }
 
-    // Статус связи и push — одна строка
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,

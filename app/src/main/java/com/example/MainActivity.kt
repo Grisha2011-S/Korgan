@@ -166,8 +166,6 @@ fun MainAppScreen(viewModel: MainViewModel) {
         settings.hasCompletedLanguageSetup,
         settings.hasCompletedProfileSetup
     ) {
-        // Разрешения и фоновая служба запускаются только после того, как
-        // пользователь выбрал язык и заполнил обязательный профиль.
         if (settings.hasCompletedLanguageSetup && settings.hasCompletedProfileSetup) {
             if (!permissionsGranted) {
                 permissionLauncher.launch(getPermissionsToRequest())
@@ -327,10 +325,6 @@ private fun getRequiredPermissions(): Array<String> {
     return list.toTypedArray()
 }
 
-/**
- * CALL_PHONE is requested together with the essential permissions but is not
- * required for the app to work: without it the dispatcher falls back to the dialer.
- */
 private fun getPermissionsToRequest(): Array<String> =
     getRequiredPermissions() + arrayOf(Manifest.permission.CALL_PHONE)
 

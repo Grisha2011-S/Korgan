@@ -82,7 +82,6 @@ fun BleDevicesScreen(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // ── Поиск ────────────────────────────────────────────────────
         Surface(
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
@@ -141,7 +140,6 @@ fun BleDevicesScreen(
             }
         }
 
-        // ── Сохранённый датчик ───────────────────────────────────────
         if (settings.savedBleAddress.isNotBlank()) {
             val isSavedConnected = isConnected && settings.savedBleAddress == connectedAddress
 
@@ -198,7 +196,6 @@ fun BleDevicesScreen(
             }
         }
 
-        // ── Найденные устройства ─────────────────────────────────────
         SectionCard(
             icon = Icons.Outlined.Bluetooth,
             title = if (discoveredDevices.isEmpty()) strings.bleSearchAndPairTitle

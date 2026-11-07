@@ -52,8 +52,6 @@ class FallDetectionService : Service() {
             }
         }
 
-        // Страховка на случай, если callback о потере связи был пропущен
-        // после сна/Doze. Раз в 30 секунд проверяем состояние и переподключаемся.
         serviceScope.launch {
             while (true) {
                 delay(30_000)
@@ -108,8 +106,6 @@ class FallDetectionService : Service() {
             startForeground(NOTIFICATION_ID, notification, serviceType)
             return
         } catch (e: Exception) {
-            // На части прошивок location-тип запрещён при старте из фона
-            // (например, после перезагрузки). Тогда работаем без него.
             android.util.Log.w("FallDetectionService", "startForeground(location) failed", e)
         }
 
@@ -193,8 +189,6 @@ class FallDetectionService : Service() {
             return START_NOT_STICKY
         }
 
-        // После перезапуска процесса системой (в том числе после перезагрузки
-        // телефона) заново удерживаем CPU и сразу восстанавливаем BLE-связь.
         try {
             if (wakeLock?.isHeld != true) {
                 wakeLock?.acquire()
@@ -232,7 +226,6 @@ class FallDetectionService : Service() {
             val app = context.applicationContext as? FallGuardApplication ?: return
             val settings = app.preferences.getSettings()
             if (!settings.hasCompletedProfileSetup || !settings.serviceEnabled) return
-            // Телефон родственника не подключается к браслету.
             if (app.familyCloud.state.value.role == com.example.cloud.PhoneRole.CAREGIVER) return
             if (!app.bleManager.hasBluetoothPermission()) return
             try {

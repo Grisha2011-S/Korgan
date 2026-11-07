@@ -12,10 +12,6 @@ import com.example.i18n.FamilyText
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
-/**
- * Push от сервера Қорған. Сообщения приходят без notification-блока (data-only),
- * поэтому тревогу показывает само приложение — даже когда оно закрыто.
- */
 class KorganMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {

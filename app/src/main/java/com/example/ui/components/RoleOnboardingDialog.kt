@@ -36,7 +36,6 @@ import com.example.cloud.PhoneRole
 import com.example.i18n.FamilyText
 import com.example.ui.theme.PrimaryBlue
 
-/** Первый вопрос после выбора языка: этот телефон носит браслет или следит за близким. */
 @Composable
 fun RoleOnboardingDialog(
     languageCode: String,

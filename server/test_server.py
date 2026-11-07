@@ -24,7 +24,6 @@ def test_full_alert_flow(tmp_path):
     assert len(code) == 6
     linked = c.post("/api/pair/join", json={"code": code}, headers=granny).json()
     assert linked["name"] == "Айгуль" and linked["has_push"]
-    # a code works only once
     assert c.post("/api/pair/join", json={"code": code}, headers=granny).status_code == 404
 
     assert [l["name"] for l in c.get("/api/links", headers=granny).json()] == ["Айгуль"]
@@ -53,13 +52,11 @@ def test_permissions(tmp_path):
 
     assert c.get("/api/links").status_code == 401
     assert c.get("/api/links", headers={"Authorization": "Bearer x.y"}).status_code == 401
-    # roles are enforced
     assert c.post("/api/pair/code", headers=granny).status_code == 403
     assert c.post("/api/alerts", headers=stranger, json={"kind": "SOS", "title": "t", "body": "b"}).status_code == 403
 
     alert = c.post("/api/alerts", headers=granny, json={"kind": "SOS", "title": "t", "body": "b"}).json()
     assert alert["linked"] == 0
-    # an unlinked caregiver can neither see nor acknowledge it
     assert c.get("/api/alerts", headers=stranger).json() == []
     assert c.post(f"/api/alerts/{alert['alert_id']}/ack", headers=stranger).status_code == 404
 

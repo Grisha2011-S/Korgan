@@ -6,13 +6,6 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-/**
- * Формирует понятное экстренное SMS.
- *
- * Пользовательский шаблон — это только основная фраза. Время, место,
- * координаты и ссылка на карту добавляются автоматически, поэтому в SMS
- * никогда не теряется ключевая информация.
- */
 class SmsMessageBuilder {
 
     fun defaultTemplate(languageCode: String): String = DefaultTemplates.forLanguage(languageCode)
@@ -89,7 +82,6 @@ class SmsMessageBuilder {
         return if (AlertSource.isSos(source)) labels.voiceSos(name, place) else labels.voiceFall(name, place)
     }
 
-    /** Text read out to the person who answers the emergency call. */
     fun buildCallVoiceMessage(
         source: String,
         userName: String,

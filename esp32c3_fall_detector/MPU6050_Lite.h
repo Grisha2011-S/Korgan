@@ -7,7 +7,6 @@
 
 #define MPU6050_ADDR 0x68
 
-// Регистры MPU-6050 / MPU-6500
 #define MPU6050_REG_SMPLRT_DIV   0x19
 #define MPU6050_REG_CONFIG       0x1A
 #define MPU6050_REG_GYRO_CONFIG  0x1B
@@ -17,20 +16,18 @@
 #define MPU6050_REG_PWR_MGMT_2   0x6C
 #define MPU6050_REG_WHO_AM_I     0x75
 
-// Диапазоны измерения акселерометра (AFS_SEL)
 enum AccelRange : uint8_t {
-    ACCEL_FS_2G  = 0x00, // ±2g  (16384 LSB/g) — насыщается при ударе
-    ACCEL_FS_4G  = 0x08, // ±4g  (8192 LSB/g)
-    ACCEL_FS_8G  = 0x10, // ±8g  (4096 LSB/g) — компромисс для падений
-    ACCEL_FS_16G = 0x18  // ±16g (2048 LSB/g) — максимальный запас по удару
+    ACCEL_FS_2G  = 0x00,
+    ACCEL_FS_4G  = 0x08,
+    ACCEL_FS_8G  = 0x10,
+    ACCEL_FS_16G = 0x18
 };
 
-// Диапазоны измерения гироскопа (FS_SEL)
 enum GyroRange : uint8_t {
-    GYRO_FS_250DPS  = 0x00, // ±250 °/s  (131.0 LSB/°/s)
-    GYRO_FS_500DPS  = 0x08, // ±500 °/s  (65.5 LSB/°/s)
-    GYRO_FS_1000DPS = 0x10, // ±1000 °/s (32.8 LSB/°/s)
-    GYRO_FS_2000DPS = 0x18  // ±2000 °/s (16.4 LSB/°/s)
+    GYRO_FS_250DPS  = 0x00,
+    GYRO_FS_500DPS  = 0x08,
+    GYRO_FS_1000DPS = 0x10,
+    GYRO_FS_2000DPS = 0x18
 };
 
 struct MPUData {
@@ -70,9 +67,6 @@ private:
         return 0;
     }
 
-    // Транзакция чтения 14 байт с несколькими попытками. На дешёвых клонах
-    // MPU-6050 I2C-шина иногда теряет пакет, и одиночный сбой не должен
-    // выглядеть как падение.
     bool readBurst(uint8_t* buffer, size_t length) {
         for (uint8_t attempt = 0; attempt < 3; ++attempt) {
             Wire.beginTransmission(address);
@@ -110,26 +104,21 @@ public:
         Wire.begin(sdaPin, sclPin, frequency);
         delay(20);
 
-        // Проверяем, что устройство вообще есть на шине.
         Wire.beginTransmission(address);
         if (Wire.endTransmission() != 0) {
             return false;
         }
 
-        // Полный сброс: выводит датчик из любого «зависшего» состояния,
-        // в котором он мог остаться после перезагрузки МК без снятия питания.
         writeRegister(MPU6050_REG_PWR_MGMT_1, 0x80);
         delay(100);
         writeRegister(MPU6050_REG_PWR_MGMT_1, 0x00);
         delay(50);
 
-        // Тактирование от PLL гироскопа X — стабильнее внутреннего RC.
         if (!writeRegister(MPU6050_REG_PWR_MGMT_1, 0x01)) {
             writeRegister(MPU6050_REG_PWR_MGMT_1, 0x00);
         }
         delay(20);
 
-        // Разбудить все оси: после reset PWR_MGMT_2 может содержать 0x3F.
         if (!writeRegister(MPU6050_REG_PWR_MGMT_2, 0x00)) {
             return false;
         }
@@ -137,11 +126,10 @@ public:
 
         setAccelRange(aRange);
         setGyroRange(gRange);
-        setDLPF(0x03);          // ~44 Гц: отсекает вибрацию шагов
-        setSampleRateDivider(4); // 1 кГц / (1 + 4) = 200 Гц
+        setDLPF(0x03);
+        setSampleRateDivider(4);
 
         uint8_t whoAmI = readRegister(MPU6050_REG_WHO_AM_I);
-        // 0x68 — MPU-6050, 0x70/0x72 — MPU-6500, 0x98 — некоторые клоны.
         if (whoAmI != 0x68 && whoAmI != 0x70 && whoAmI != 0x72 && whoAmI != 0x98) {
             return false;
         }
@@ -180,8 +168,6 @@ public:
         writeRegister(MPU6050_REG_SMPLRT_DIV, divider);
     }
 
-    // true  = гироскоп в Standby (акселерометр работает, ток ~0.5 мА)
-    // false = все оси гироскопа активны
     void setGyroStandby(bool standby) {
         if (writeRegister(MPU6050_REG_PWR_MGMT_2, standby ? 0x07 : 0x00)) {
             gyroStandby = standby;
@@ -229,7 +215,6 @@ public:
         return whoAmI == 0x68 || whoAmI == 0x70 || whoAmI == 0x72 || whoAmI == 0x98;
     }
 
-    // Обратная совместимость с вызовом data = mpu.readAll()
     MPUData readAll() {
         MPUData data;
         readAll(data);
@@ -237,4 +222,4 @@ public:
     }
 };
 
-#endif // MPU6050_LITE_H
+#endif

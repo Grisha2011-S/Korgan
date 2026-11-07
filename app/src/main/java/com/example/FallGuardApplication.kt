@@ -65,16 +65,6 @@ class FallGuardApplication : Application() {
     private val _dispatchState = MutableStateFlow<EmergencyDispatchState?>(null)
     val dispatchState: StateFlow<EmergencyDispatchState?> = _dispatchState.asStateFlow()
 
-    /**
-     * Реакция на событие падения/нажатия SOS.
-     *
-     * Одновременно:
-     *  - запускается громкий циклический сигнал (он разбудит, даже если
-     *    полноэкранное уведомление запрещено);
-     *  - показывается экран тревоги;
-     *  - взводится страховочный таймер. Если система не дала открыть экран,
-     *    через таймер отмены + 20 секунд SMS/звонок всё равно будут отправлены.
-     */
     fun onFallAlert(source: String, isTest: Boolean = false) {
         resetDispatchIfFinished()
         familyCloud.clearLiveAlert()
@@ -98,7 +88,6 @@ class FallGuardApplication : Application() {
         }
     }
 
-    /** Экран тревоги показан, отменён или отправка уже запущена. */
     fun onAlertHandled() {
         alertHandled = true
         alertWatchdog?.cancel()
@@ -106,7 +95,6 @@ class FallGuardApplication : Application() {
         AlarmSoundPlayer.stop()
     }
 
-    /** Проверка полного пути тревоги, включая звук и страховочную отправку. */
     fun triggerTestAlert() {
         onFallAlert(AlertSource.NOTIFICATION_TEST, isTest = true)
         EmergencyAlertActivity.launch(
@@ -116,10 +104,6 @@ class FallGuardApplication : Application() {
         )
     }
 
-    /**
-     * Runs the emergency protocol in an application-scoped coroutine so that
-     * activity recreation (rotation, screen off) neither cancels nor duplicates it.
-     */
     fun startDispatch(source: String, isTest: Boolean = false): Long {
         val current = _dispatchState.value
         if (current?.inProgress == true) return current.id
@@ -135,14 +119,11 @@ class FallGuardApplication : Application() {
             }
             _dispatchState.value = EmergencyDispatchState(id, source, isTest, false, result)
             AlarmSoundPlayer.stop()
-            // Если экран так и не открылся, не оставляем вечно висящую
-            // полноэкранную тревогу после фактической отправки.
             EmergencyAlertActivity.cancelAlertNotification(this@FallGuardApplication)
         }
         return id
     }
 
-    /** Clears a finished dispatch so the next alert starts with a fresh countdown. */
     fun resetDispatchIfFinished() {
         if (_dispatchState.value?.inProgress != true) {
             _dispatchState.value = null
@@ -186,11 +167,8 @@ class FallGuardApplication : Application() {
             }
         }
 
-        // До завершения обязательного онбординга приложение не запускает
-        // фоновую службу и не использует геолокацию.
         familyCloud.syncInBackground()
         val settings = preferences.getSettings()
-        // Телефон родственника не подключается к браслету и не следит за геолокацией.
         if (settings.hasCompletedProfileSetup && familyCloud.state.value.role == PhoneRole.WEARER) {
             locationHelper.requestSingleUpdate()
             if (settings.serviceEnabled && hasRequiredPermissionsForService()) {
@@ -262,8 +240,6 @@ class FallGuardApplication : Application() {
 
     companion object {
         const val CHANNEL_SERVICE_ID = "fall_service_channel"
-        // Новый ID важен: существующий канал нельзя повысить программно,
-        // если пользователь ранее изменил его важность.
         const val CHANNEL_ALERT_ID = "fall_alert_channel_v2"
         const val CHANNEL_INFO_ID = "family_info_channel"
 

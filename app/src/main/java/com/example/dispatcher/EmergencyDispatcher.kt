@@ -30,9 +30,7 @@ enum class DispatchStatus {
     SMS_SENT,
     SMS_PARTIAL,
     CALL_STARTED,
-    /** Тревога доставлена родственникам в приложение, SMS не понадобились. */
     APP_SENT,
-    /** Родственник ответил «Я еду». */
     APP_ACKED,
     FAILED
 }
@@ -42,7 +40,6 @@ data class DispatchResult(
     val message: String,
     val sentCount: Int = 0,
     val totalCount: Int = 0,
-    /** Сколько родственников связано с телефоном через сервер (0 — приложение не использовалось). */
     val appRecipients: Int = 0,
     val appAckedBy: String? = null
 )
@@ -126,8 +123,6 @@ class EmergencyDispatcher(
         var sentCount = 0
         var callStarted = false
 
-        // 1. Родственники в приложении Қорған (через сервер). Проверочная тревога
-        //    тоже уходит в приложение — так удобно проверить связку телефонов.
         val delivery = familyCloud.state.value.delivery
         val appAlert: SentAlert? = if (delivery != AlertDelivery.SMS) {
             sendToApp(source, isTest, settings.userName, settings.appLanguage, smsText, address,
@@ -137,8 +132,6 @@ class EmergencyDispatcher(
         }
         var appAckedBy: String? = null
 
-        // 2. Нужны ли SMS и звонок. Если сервер недоступен или никто не связан,
-        //    SMS уходят при любом режиме: тревога не должна потеряться.
         val smsNeeded = when {
             isTest -> false
             delivery == AlertDelivery.SMS || delivery == AlertDelivery.BOTH -> true

@@ -18,10 +18,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
-/** Что делает этот телефон: носит браслет или получает тревоги близкого. */
 enum class PhoneRole { UNSET, WEARER, CAREGIVER }
 
-/** Как телефон с браслетом оповещает родственников. */
 enum class AlertDelivery { APP_THEN_SMS, APP, SMS, BOTH }
 
 data class FamilyState(
@@ -37,13 +35,8 @@ data class FamilyState(
     val inbox: List<RemoteAlert> = emptyList()
 )
 
-/** Тревога, отправленная с этого телефона через сервер, пока ждём ответа. */
 data class LiveAlert(val id: String, val linked: Int, val ackedByName: String? = null)
 
-/**
- * Связь с сервером Қорған (server/korgan_server.py): регистрация телефона,
- * связка «носит браслет ↔ родственник» по коду, отправка тревоги и ответ «Я еду».
- */
 class FamilyCloud(private val context: Context) {
 
     private val prefs: SharedPreferences =
@@ -56,7 +49,6 @@ class FamilyCloud(private val context: Context) {
     private val _liveAlert = MutableStateFlow<LiveAlert?>(null)
     val liveAlert: StateFlow<LiveAlert?> = _liveAlert.asStateFlow()
 
-    /** Нужен при регистрации телефона с браслетом: имя берётся из профиля. */
     var wearerNameProvider: () -> String = { "" }
 
     private fun load(): FamilyState {
@@ -81,14 +73,12 @@ class FamilyCloud(private val context: Context) {
         return if (url.isBlank()) null else CloudApi(url, token)
     }
 
-    /** У старых установок роли нет: если профиль уже заполнен, это телефон с браслетом. */
     fun migrateRole(profileCompleted: Boolean) {
         if (_state.value.role == PhoneRole.UNSET && profileCompleted) setRole(PhoneRole.WEARER)
     }
 
     fun setRole(role: PhoneRole) {
         if (role == _state.value.role) return
-        // Регистрация на сервере привязана к роли, поэтому при смене роли начинаем заново.
         prefs.edit().putString(KEY_ROLE, role.name).remove(KEY_TOKEN).apply()
         _state.value = _state.value.copy(role = role, registered = false, links = emptyList(), inbox = emptyList())
     }
@@ -103,10 +93,6 @@ class FamilyCloud(private val context: Context) {
         _state.value = _state.value.copy(ackTimeoutSeconds = seconds)
     }
 
-    /**
-     * Сохраняет адрес сервера и регистрирует телефон. Новый адрес — новая
-     * регистрация (на другом сервере этого телефона нет).
-     */
     suspend fun connect(serverUrl: String, myName: String? = null): Result<Unit> = runCatching {
         val url = normalizeUrl(serverUrl)
         val current = _state.value
@@ -124,7 +110,6 @@ class FamilyCloud(private val context: Context) {
             _state.value = _state.value.copy(links = requireApi().links(), online = true)
         } catch (e: CloudException) {
             if (e.code != 401) throw e
-            // Сервер не знает этот телефон (например, базу удалили): регистрируемся заново.
             prefs.edit().remove(KEY_TOKEN).apply()
             ensureRegistered()
             _state.value = _state.value.copy(links = requireApi().links(), online = true)
@@ -169,7 +154,6 @@ class FamilyCloud(private val context: Context) {
         Unit
     }
 
-    /** Отправляет тревогу родственникам. null — сервер недоступен или телефон не связан. */
     suspend fun sendAlert(
         kind: String,
         title: String,
@@ -190,10 +174,6 @@ class FamilyCloud(private val context: Context) {
         }.onFailure { markOffline(it) }.getOrNull()
     }
 
-    /**
-     * Ждёт ответа «Я еду». Опрашивает сервер раз в 3 с; push с ответом
-     * приходит в [onAckPush] и завершает ожидание сразу.
-     */
     suspend fun waitForAck(alertId: String, timeoutMs: Long): String? = withTimeoutOrNull(timeoutMs) {
         var name: String? = null
         while (name == null) {
@@ -218,7 +198,6 @@ class FamilyCloud(private val context: Context) {
         if (live != null && live.id == alertId) _liveAlert.value = live.copy(ackedByName = name)
     }
 
-    /** Родственник: забирает последние тревоги (нужно и без push, пока приложение открыто). */
     suspend fun refreshInbox(): Result<List<RemoteAlert>> = runCatching {
         val inbox = requireApi().alerts()
         _state.value = _state.value.copy(inbox = inbox, online = true)
@@ -233,13 +212,11 @@ class FamilyCloud(private val context: Context) {
         acked
     }
 
-    /** Новый FCM-токен: сообщаем серверу, если телефон уже зарегистрирован. */
     fun onNewPushToken(pushToken: String) {
         if (token.isNullOrBlank()) return
         scope.launch { runCatching { api()?.updateMe(pushToken = pushToken) } }
     }
 
-    /** При старте приложения: обновить токен push и список связей. */
     fun syncInBackground() {
         val s = _state.value
         if (!s.registered || s.serverUrl.isBlank()) return

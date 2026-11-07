@@ -1,17 +1,3 @@
-"""
-Korgan alert server.
-
-Links the phone of the person who wears the bracelet ("wearer") with the phones
-of relatives ("caregivers") and forwards fall / SOS alerts to them as push
-notifications (Firebase Cloud Messaging; works for Android and iOS).
-
-Run:
-    pip install -r requirements.txt
-    python korgan_server.py                 # http://0.0.0.0:8000
-
-Without firebase-service-account.json the server runs in dry-run mode: pushes
-are only logged, and the caregiver app picks alerts up by polling while open.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -43,7 +29,6 @@ ALERT_HISTORY_LIMIT = 50
 log = logging.getLogger("korgan")
 
 
-# ---------------------------------------------------------------- storage
 class Store:
     def __init__(self, path: Path):
         self._lock = threading.Lock()
@@ -112,7 +97,6 @@ def hash_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
 
 
-# ---------------------------------------------------------------- API models
 Role = Literal["wearer", "caregiver"]
 Platform = Literal["android", "ios"]
 AlertKind = Literal["FALL", "SOS", "TEST"]
@@ -186,7 +170,6 @@ class AlertOut(BaseModel):
     acked_at: Optional[float]
 
 
-# ---------------------------------------------------------------- app
 def create_app(db_path: Path = DB_PATH, service_account: Path = SERVICE_ACCOUNT) -> FastAPI:
     store = Store(db_path)
     pusher = Pusher(service_account)
@@ -276,7 +259,6 @@ def create_app(db_path: Path = DB_PATH, service_account: Path = SERVICE_ACCOUNT)
                 (body.code, now),
             ).fetchone()
             if row is None:
-                # recorded without raising inside the transaction, so it is not rolled back
                 db.execute("INSERT INTO pair_failures VALUES (?, ?)", (me["id"], now))
                 caregiver = None
             else:

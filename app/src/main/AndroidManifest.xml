@@ -43,8 +43,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication"
         android:usesCleartextTraffic="true">
-        <!-- usesCleartextTraffic: сервер Қорған на ноутбуке в домашней сети доступен по http://.
-             Для сервера в интернете используйте https. -->
 
         <activity
             android:name=".MainActivity"

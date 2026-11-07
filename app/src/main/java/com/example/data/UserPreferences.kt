@@ -27,7 +27,6 @@ data class UserSettings(
     val autoReconnect: Boolean = true,
     val serviceEnabled: Boolean = true
 ) {
-    /** Первый корректный номер — используется для экстренного звонка. */
     val contactPhone: String
         get() = emergencyContacts.firstOrNull { isValidPhoneNumber(it.phone) }?.phone
             ?: emergencyContacts.firstOrNull()?.phone.orEmpty()
@@ -86,7 +85,6 @@ class UserPreferences(context: Context) {
             if (parsed.isNotEmpty()) return parsed
         }
 
-        // Миграция со старой версии, где был один номер без имени.
         val legacyPhone = (prefs.getString(KEY_CONTACT_PHONE, "") ?: "").trim()
         if (legacyPhone.isNotBlank()) {
             val migrated = listOf(EmergencyContact(name = "", phone = legacyPhone))
@@ -101,7 +99,6 @@ class UserPreferences(context: Context) {
 
     fun getSettings(): UserSettings = _settingsFlow.value
 
-    /** Сохраняет результат обязательного первичного заполнения профиля. */
     fun saveProfile(name: String, contacts: List<EmergencyContact>) {
         val cleanName = name.trim()
         val cleanContacts = contacts
@@ -151,10 +148,6 @@ class UserPreferences(context: Context) {
         _settingsFlow.value = _settingsFlow.value.copy(hasCompletedLanguageSetup = true)
     }
 
-    /**
-     * Не обрезает пробелы: иначе нельзя набрать имя из двух слов или номер
-     * с пробелами. Нормализация выполняется при сохранении и отправке.
-     */
     fun updateUserName(name: String) {
         prefs.edit().putString(KEY_USER_NAME, name).apply()
         _settingsFlow.value = _settingsFlow.value.copy(userName = name)

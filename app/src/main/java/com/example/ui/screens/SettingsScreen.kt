@@ -96,8 +96,6 @@ fun SettingsScreen(
     var nameInput by remember(settings.userName) { mutableStateOf(settings.userName) }
     var templateInput by remember(settings.customTemplate) { mutableStateOf(settings.customTemplate) }
 
-    // Локальная копия нужна, чтобы пустая строка нового получателя не исчезала
-    // в момент, когда пользователь ещё ничего не ввёл.
     var contacts by remember {
         mutableStateOf(
             settings.emergencyContacts.ifEmpty { listOf(EmergencyContact()) }
@@ -126,7 +124,6 @@ fun SettingsScreen(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // ── Профиль ──────────────────────────────────────────────────
         SectionCard(icon = Icons.Outlined.Person, title = strings.profileSectionTitle) {
             OutlinedTextField(
                 value = nameInput,
@@ -143,7 +140,6 @@ fun SettingsScreen(
             )
         }
 
-        // ── Контакты ─────────────────────────────────────────────────
         SectionCard(
             icon = Icons.Outlined.Group,
             title = strings.contactsSectionTitle,
@@ -249,7 +245,6 @@ fun SettingsScreen(
             }
         }
 
-        // ── Способы оповещения ───────────────────────────────────────
         SectionCard(icon = Icons.Outlined.NotificationsActive, title = strings.alertMethodsSectionTitle) {
             ToggleRow(
                 icon = Icons.Outlined.Sms,
@@ -301,7 +296,6 @@ fun SettingsScreen(
             )
         }
 
-        // ── Шаблон SMS ───────────────────────────────────────────────
         SectionCard(icon = Icons.AutoMirrored.Outlined.Chat, title = strings.smsTemplateSectionTitle) {
             OutlinedTextField(
                 value = templateInput,
@@ -341,7 +335,6 @@ fun SettingsScreen(
             }
         }
 
-        // ── Надёжность тревоги ───────────────────────────────────────
         SectionCard(icon = Icons.Outlined.Shield, title = strings.reliabilityTitle) {
             ReliabilityRow(
                 icon = Icons.Outlined.Notifications,
@@ -437,7 +430,6 @@ fun SettingsScreen(
             text = com.example.i18n.FamilyText.get(settings.appLanguage)
         )
 
-        // ── Язык ─────────────────────────────────────────────────────
         SectionCard(icon = Icons.Outlined.Language, title = strings.languageSectionTitle) {
             Row(
                 modifier = Modifier.fillMaxWidth(),

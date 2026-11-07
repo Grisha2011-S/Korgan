@@ -154,11 +154,8 @@ class EmergencyAlertActivity : ComponentActivity() {
         setIntent(intent)
         (application as FallGuardApplication).resetDispatchIfFinished()
         readAlertIntent(intent)
-        // Экран уже открыт: дальше работает вибрация самого экрана, а не
-        // фоновый сигнал. Иначе звук наложится на новый отсчёт.
         AlarmSoundPlayer.stop()
         startVibration()
-        // Recreates the screen state so a new fall restarts the countdown.
         alertGeneration++
     }
 
@@ -187,8 +184,6 @@ class EmergencyAlertActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Экран тревоги сам вибрирует и отсчитывает время, поэтому фоновый
-        // циклический сигнал больше не нужен.
         AlarmSoundPlayer.stop()
         startVibration()
     }
@@ -237,7 +232,6 @@ class EmergencyAlertActivity : ComponentActivity() {
             } catch (_: Exception) {}
 
             val app = context.applicationContext as? FallGuardApplication
-            // A new alert must start with a clean countdown, unless a dispatch is still running.
             app?.resetDispatchIfFinished()
 
             val intent = Intent(context, EmergencyAlertActivity::class.java).apply {
@@ -261,7 +255,6 @@ class EmergencyAlertActivity : ComponentActivity() {
                     context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 val strings = AppStrings.get(app?.preferences?.getSettings()?.appLanguage ?: "ru")
 
-                // Since Android 14, full-screen intents must be explicitly allowed by the user.
                 val canUseFullScreenIntent =
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                         notificationManager?.canUseFullScreenIntent() == true
@@ -292,8 +285,6 @@ class EmergencyAlertActivity : ComponentActivity() {
                     .setContentIntent(pendingIntent)
                     .setWhen(System.currentTimeMillis())
                     .setShowWhen(true)
-                    // Тревога не должна исчезнуть от случайного свайпа. Она
-                    // снимается только после отмены или отправки SMS/звонка.
                     .setOngoing(true)
                     .setAutoCancel(false)
 

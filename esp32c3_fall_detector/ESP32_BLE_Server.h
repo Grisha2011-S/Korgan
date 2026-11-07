@@ -10,18 +10,9 @@
 #include <BLE2902.h>
 #endif
 
-// UUID сервиса и единственной характеристики чтения/записи/уведомлений.
-// Менять нельзя: эти значения прошиты в Android-приложении.
 #define DEFAULT_SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define DEFAULT_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-/**
- * Тонкая обёртка над BLE-сервером ESP32 core 3.x.
- *
- * Поддерживает Bluedroid и NimBLE. В NimBLE CCCD добавляется автоматически,
- * поэтому BLE2902 здесь не используется; в Bluedroid он нужен, иначе notify()
- * считает, что клиент не подписан.
- */
 class ESP32_BLE_Server : public BLEServerCallbacks, public BLECharacteristicCallbacks {
 private:
     BLEServer* pServer = nullptr;
@@ -37,8 +28,6 @@ private:
     volatile unsigned long connectedAt = 0;
     volatile unsigned long subscribedAt = 0;
 
-    // Очередь команд: телефон может отправить несколько ACK подряд быстрее,
-    // чем loop() успеет их обработать. Одна ячейка потеряла бы часть ACK.
     static const uint8_t RX_SLOTS = 8;
     static const size_t RX_MAX = 64;
     char rxQueue[RX_SLOTS][RX_MAX] = {{0}};
@@ -72,7 +61,6 @@ private:
 
         portENTER_CRITICAL(&dataMux);
         if (rxCount == RX_SLOTS) {
-            // Переполнение: выбрасываем самую старую команду, но сохраняем новые.
             rxTail = (rxTail + 1) % RX_SLOTS;
             rxCount--;
         }
@@ -131,13 +119,11 @@ public:
         BLEAdvertising* advertising = BLEDevice::getAdvertising();
         advertising->addServiceUUID(DEFAULT_SERVICE_UUID);
         advertising->setScanResponse(true);
-        advertising->setMinPreferred(0x06); // ~7.5 мс: телефон быстро находит плату
+        advertising->setMinPreferred(0x06);
         BLEDevice::startAdvertising();
         return true;
     }
 
-    // Перезапуск рекламы после отключения клиента. Без этого плата
-    // становится невидимой для телефона до перезагрузки.
     void loop() {
         if (!deviceConnected && wasConnected) {
             wasConnected = false;
@@ -186,8 +172,6 @@ public:
         char local[RX_MAX] = {0};
         bool available;
 
-        // Копируем под спинлоком только байты. Создание String (выделение
-        // памяти) выполняем уже с включёнными прерываниями.
         portENTER_CRITICAL(&dataMux);
         available = rxCount > 0;
         if (available) {
@@ -220,4 +204,4 @@ public:
     }
 };
 
-#endif // ESP32_BLE_SERVER_H
+#endif

@@ -1,31 +1,13 @@
-/*
- * Korgan / Қорған — ESP32-C3 fall detector and SOS button.
- *
- * v3 protocol (UTF-8 strings over one BLE characteristic):
- *   device -> phone:  READY:<fw> | INFO:<...> | ERROR:SENSOR
- *                     FALL:<seq>:<battery>:<uptime_s>
- *                     SOS:<seq>:<battery>:<uptime_s>
- *                     PONG
- *   phone -> device:  ACK:<seq> | PING | STATUS | TEST
- *
- * Alarm events are stored in NVS before transmission and removed only after
- * ACK. If the phone is out of range or the app is killed, the event survives
- * a power loss and is retransmitted on the next connection.
- */
-
 #include "ESP32_BLE_Server.h"
 #include "MPU6050_Lite.h"
 
 #include <Preferences.h>
 #include <math.h>
 
-// ============================================================================
-// 1. Hardware
-// ============================================================================
-#define BUTTON_PIN        0   // SOS button, INPUT_PULLUP, to GND
-#define LED_PIN           1   // external LED
-#define BOARD_LED_PIN     8   // SuperMini blue LED, active LOW
-#define BUZZER_PIN        2   // buzzer / PWM
+#define BUTTON_PIN        0
+#define LED_PIN           1
+#define BOARD_LED_PIN     8
+#define BUZZER_PIN        2
 #define SDA_PIN           4
 #define SCL_PIN           3
 
@@ -34,16 +16,10 @@
 #define BATTERY_DIVIDER     2.0f
 #define BATTERY_ADC_SAMPLES 8
 
-// На ESP32-C3 GPIO5 — это ADC2. В ядре esp32 3.x ADC2 на C3 отключён из-за
-// аппаратной ошибки, и analogReadMilliVolts() на нём возвращает 0.
-// АЦП надёжно работает только на GPIO0–GPIO4 (ADC1).
 #if ENABLE_BATTERY_ADC && (BATTERY_ADC_PIN > 4)
 #warning "ESP32-C3: BATTERY_ADC_PIN is on ADC2, battery level will read 0%"
 #endif
 
-// ============================================================================
-// 2. Fall detection
-// ============================================================================
 #define THRESH_FREE_FALL_G      0.55f
 #define MIN_FREE_FALL_MS        65
 #define MAX_FREE_FALL_MS        700
@@ -57,22 +33,16 @@
 #define REST_MAX_GYRO_DPS       45.0f
 #define REST_MAX_ACCEL_DELTA_G  0.40f
 
-// ============================================================================
-// 3. Power / timing
-// ============================================================================
 #define CPU_FREQ_MHZ            80
 #define ENABLE_SMART_GYRO_SLEEP true
-#define LOOP_DELAY_MS           5     // 200 Гц, как частота выборки MPU6050
-#define GYRO_STARTUP_MS         35    // гироскопу нужно ~30 мс после standby
+#define LOOP_DELAY_MS           5
+#define GYRO_STARTUP_MS         35
 #define ALARM_COOLDOWN_MS       4000
 #define SOS_COOLDOWN_MS         1500
 #define BUTTON_DEBOUNCE_MS      20
 #define SENSOR_RETRY_MS         5000
 #define SENSOR_FAIL_LIMIT       5
 
-// ============================================================================
-// 4. BLE / NVS protocol
-// ============================================================================
 #define FW_VERSION              "3.0.1"
 #define DEVICE_NAME             "Korgan-C3"
 #define MAX_PENDING_EVENTS      8
@@ -98,9 +68,6 @@ enum FallState : uint8_t {
     STATE_REST_CHECK
 };
 
-// ============================================================================
-// 5. Globals
-// ============================================================================
 ESP32_BLE_Server bleServer;
 MPU6050_Lite mpu;
 Preferences preferences;
@@ -122,7 +89,7 @@ float maxImpact = 0.0f;
 
 bool gyroSleeping = false;
 unsigned long stillSince = 0;
-unsigned long gyroReadyAt = 0;   // до этого момента показания гироскопа недостоверны
+unsigned long gyroReadyAt = 0;
 
 bool alarmActive = false;
 bool alarmIsSos = false;
@@ -143,9 +110,6 @@ unsigned long lastPendingSendAt = 0;
 bool sensorErrorReported = false;
 unsigned long lastTelemetryAt = 0;
 
-// ============================================================================
-// 6. LED / buzzer
-// ============================================================================
 void initBuzzer() {
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
     ledcAttach(BUZZER_PIN, 1000, 8);
@@ -191,19 +155,13 @@ void updateAlarm(unsigned long now) {
         return;
     }
 
-    // Короткие импульсы: 150 мс звук, 100 мс пауза.
     bool on = (elapsed % 250UL) < 150UL;
     digitalWrite(LED_PIN, on ? HIGH : LOW);
     digitalWrite(BOARD_LED_PIN, on ? LOW : HIGH);
     buzzer(on);
 }
 
-// ============================================================================
-// 7. Battery
-// ============================================================================
 #if ENABLE_BATTERY_ADC
-// Разрядная кривая Li-Po 3.7 В без нагрузки: напряжение → процент.
-// Зависимость нелинейная: от 3.9 до 3.7 В уходит больше половины ёмкости.
 static const float LIPO_VOLTS[]   = {3.27f, 3.61f, 3.69f, 3.71f, 3.73f, 3.75f, 3.77f, 3.79f, 3.80f,
                                      3.82f, 3.84f, 3.85f, 3.87f, 3.91f, 3.95f, 3.98f, 4.02f, 4.08f,
                                      4.11f, 4.15f, 4.20f};
@@ -213,7 +171,6 @@ static const uint8_t LIPO_PERCENT[] = {0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50,
 
 int readBatteryPercent() {
 #if ENABLE_BATTERY_ADC
-    // Среднее из нескольких замеров: одиночное чтение АЦП шумит на ±30 мВ.
     uint32_t sum = 0;
     for (uint8_t i = 0; i < BATTERY_ADC_SAMPLES; ++i) {
         sum += analogReadMilliVolts(BATTERY_ADC_PIN);
@@ -225,7 +182,6 @@ int readBatteryPercent() {
     if (batteryVolts >= LIPO_VOLTS[points - 1]) return 100;
     for (uint8_t i = 1; i < points; ++i) {
         if (batteryVolts < LIPO_VOLTS[i]) {
-            // Линейная интерполяция между соседними точками кривой.
             float t = (batteryVolts - LIPO_VOLTS[i - 1]) / (LIPO_VOLTS[i] - LIPO_VOLTS[i - 1]);
             return (int)(LIPO_PERCENT[i - 1] + t * (LIPO_PERCENT[i] - LIPO_PERCENT[i - 1]) + 0.5f);
         }
@@ -236,9 +192,6 @@ int readBatteryPercent() {
 #endif
 }
 
-// ============================================================================
-// 8. NVS event queue
-// ============================================================================
 const char* kindName(uint8_t kind) {
     return kind == EVENT_SOS ? "SOS" : "FALL";
 }
@@ -323,7 +276,6 @@ void enqueueEvent(uint8_t kind) {
     event.uptime = (uint32_t)(millis() / 1000UL);
 
     if (pendingCount >= MAX_PENDING_EVENTS) {
-        // Храним последние события: самое старое вытесняется.
         for (uint8_t i = 1; i < pendingCount; ++i) {
             pendingEvents[i - 1] = pendingEvents[i];
         }
@@ -361,13 +313,9 @@ void acknowledgeEvent(uint32_t seq) {
         }
     }
 
-    // Повторный ACK после потери ответа — это нормально.
     Serial.printf("[ACK] #%lu уже подтверждено\n", (unsigned long)seq);
 }
 
-// ============================================================================
-// 9. BLE helpers
-// ============================================================================
 String statusPacket() {
     String out = "INFO:FW=" FW_VERSION;
     out += ";SENSOR=";
@@ -442,9 +390,6 @@ void serviceBle(unsigned long now) {
         }
     }
 
-    // В NimBLE подписка приходит callback'ом, в Bluedroid читаем CCCD.
-    // Если CCCD так и не появился, через READY_FALLBACK_MS всё равно шлём
-    // READY: телефон мог подписаться чуть позже.
     if (!readySent && (subscribed || (now - connectStartedAt >= READY_FALLBACK_MS))) {
         sendReady();
         readySent = true;
@@ -488,8 +433,6 @@ void handleCommand(String command) {
     }
 
     if (upper == "TEST") {
-        // Диагностика со стороны приложения/терминала: полноценное событие
-        // с номером и NVS, чтобы проверить весь путь до SMS.
         if (millis() - lastFallAlarm >= ALARM_COOLDOWN_MS) {
             lastFallAlarm = millis();
             startAlarm(false);
@@ -508,9 +451,6 @@ void pollBleCommands() {
     }
 }
 
-// ============================================================================
-// 10. Button
-// ============================================================================
 void emitSos() {
     unsigned long now = millis();
     if (now - lastSosAlarm < SOS_COOLDOWN_MS) {
@@ -543,9 +483,6 @@ void checkButton(unsigned long now) {
     }
 }
 
-// ============================================================================
-// 11. Sensor power and fall FSM
-// ============================================================================
 void updateGyroPower(float accelMag, unsigned long now) {
 #if ENABLE_SMART_GYRO_SLEEP
     if (fsmState != STATE_IDLE) {
@@ -628,8 +565,6 @@ void trySensorRecovery(unsigned long now) {
     lastSensorRetry = now;
     Serial.println("[SENSOR] Повторная инициализация MPU6050...");
 
-    // Полностью пересоздаём драйвер I2C: если датчик «повесил» шину (держит
-    // SDA в нуле), повторный Wire.begin() без end() её не освободит.
     Wire.end();
     if (mpu.begin(SDA_PIN, SCL_PIN, ACCEL_FS_8G)) {
         sensorReady = true;
@@ -663,9 +598,6 @@ void processFallDetection(unsigned long now) {
 
     updateGyroPower(accelMag, now);
 
-    // Пока гироскоп спит или просыпается (~30 мс), его регистры содержат
-    // старые или случайные значения. Считаем вращение нулевым: случайный
-    // всплеск не должен засчитываться как кувырок при падении.
     bool gyroValid = !gyroSleeping && (long)(now - gyroReadyAt) >= 0;
     float gyroMag = gyroValid ? sqrtf(sensor.gyroX * sensor.gyroX +
                                       sensor.gyroY * sensor.gyroY +
@@ -686,8 +618,6 @@ void processFallDetection(unsigned long now) {
                 maxGyroDuringFall = gyroMag;
                 maxImpact = 0.0f;
             } else if (accelMag > DIRECT_IMPACT_G) {
-                // Жёсткий удар плашмя может не иметь явной фазы невесомости.
-                // Не требуем гироскоп: лучше проверить покой, чем пропустить.
                 maxImpact = accelMag;
                 fsmState = STATE_REST_SETTLE;
                 stateStart = now;
@@ -729,7 +659,6 @@ void processFallDetection(unsigned long now) {
         }
 
         case STATE_REST_SETTLE: {
-            // Отскок после удара: запоминаем пик только для лога.
             if (accelMag > maxImpact) {
                 maxImpact = accelMag;
             }
@@ -756,9 +685,6 @@ void processFallDetection(unsigned long now) {
     }
 }
 
-// ============================================================================
-// 12. Setup / loop
-// ============================================================================
 void setup() {
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
 
@@ -784,7 +710,6 @@ void setup() {
     initBuzzer();
 
 #if ENABLE_BATTERY_ADC
-    // 11 дБ: диапазон до ~2.5 В, делитель 2:1 даёт 2.1 В при полной АКБ 4.2 В.
     analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
 #endif
 
@@ -802,7 +727,6 @@ void setup() {
         lastSensorRetry = millis();
     }
 
-    // Короткий стартовый сигнал, чтобы было видно, что плата жива.
     digitalWrite(LED_PIN, HIGH);
     digitalWrite(BOARD_LED_PIN, LOW);
     delay(120);

@@ -4,11 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 
-/**
- * Возобновляет мониторинг после перезагрузки телефона или обновления
- * приложения. Без этого после ребута датчик оставался без связи до тех пор,
- * пока пользователь вручную не откроет приложение.
- */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         when (intent?.action) {

@@ -23,11 +23,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.dispatcher.AlertSource
 import java.util.Locale
 
-/**
- * Набор системных разрешений, без которых экран тревоги не откроется на
- * заблокированном телефоне. Начиная с Android 14 полноэкранные уведомления
- * выдаются отдельно и могут быть отозваны пользователем.
- */
 data class AlarmReliability(
     val notificationsEnabled: Boolean,
     val alertChannelOk: Boolean,
@@ -166,10 +161,6 @@ object ReliabilityHelper {
         ).any { manufacturer.contains(it) }
     }
 
-    /**
-     * Тестовая тревога с задержкой: пользователь успевает заблокировать экран
-     * и проверить именно тот путь, которым идёт реальное падение.
-     */
     fun scheduleTestAlarm(context: Context, delayMs: Long = 10_000L) {
         val appContext = context.applicationContext
         pendingTest?.let(mainHandler::removeCallbacks)
@@ -209,7 +200,6 @@ object ReliabilityHelper {
             try {
                 context.startActivity(fallback)
             } catch (_: Exception) {
-                // Настройки недоступны на некоторых прошивках — ничего не делаем.
             }
         }
     }

@@ -40,7 +40,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/** Квадратная «плашка» со схематичной (outlined) иконкой. */
 @Composable
 fun IconBadge(
     icon: ImageVector,
@@ -64,7 +63,6 @@ fun IconBadge(
     }
 }
 
-/** Плоская карточка без тени: иконка + заголовок, справа — необязательное действие. */
 @Composable
 fun SectionCard(
     icon: ImageVector,
@@ -101,7 +99,6 @@ fun SectionCard(
     }
 }
 
-/** Строка настройки: иконка, одна строка текста и переключатель. Вся строка кликабельна. */
 @Composable
 fun ToggleRow(
     icon: ImageVector,
@@ -135,7 +132,6 @@ fun ToggleRow(
     }
 }
 
-/** Плитка для сетки на главном экране: иконка, крупное значение, короткая подпись. */
 @Composable
 fun InfoTile(
     icon: ImageVector,
@@ -177,10 +173,6 @@ fun InfoTile(
     }
 }
 
-/**
- * Схематичное изображение датчика-кулона: корпус, ремешок и «волны» сигнала.
- * При [active] волны расходятся по кругу, при [searching] — мигают.
- */
 @Composable
 fun DeviceIllustration(
     color: Color,
@@ -205,10 +197,8 @@ fun DeviceIllustration(
         val unit = size.minDimension / 10f
         val stroke = unit * 0.32f
 
-        // Фоновый круг-«ореол»
         drawCircle(color = color.copy(alpha = 0.10f), radius = unit * 4.6f, center = c)
 
-        // Расходящиеся волны
         if (active || searching) {
             for (i in 0 until 2) {
                 val t = (phase + i * 0.5f) % 1f
@@ -222,7 +212,6 @@ fun DeviceIllustration(
             }
         }
 
-        // Ремешок (сверху и снизу)
         val strapW = unit * 1.6f
         drawRoundRect(
             color = lineColor,
@@ -239,7 +228,6 @@ fun DeviceIllustration(
             style = Stroke(width = stroke)
         )
 
-        // Корпус
         val bodyW = unit * 3.6f
         val bodyH = unit * 4.2f
         drawRoundRect(
@@ -256,7 +244,6 @@ fun DeviceIllustration(
             style = Stroke(width = stroke)
         )
 
-        // Индикатор / «пульс» на экране
         val y = c.y
         val x0 = c.x - unit * 1.1f
         val points = listOf(

@@ -101,7 +101,6 @@ fun HomeScreen(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // ── Статус датчика ────────────────────────────────────────────
         val (statusColor, statusLabel) = when (bleStatus) {
             BleStatus.CONNECTED, BleStatus.MONITORING -> StatusConnected to strings.statusEsp32Connected
             BleStatus.CONNECTING -> StatusScanning to strings.statusEsp32Connecting
@@ -216,7 +215,6 @@ fun HomeScreen(
             }
         }
 
-        // ── Предупреждения ────────────────────────────────────────────
         if (!reliability.criticalOk) {
             WarningBanner(
                 title = strings.reliabilityTitle,
@@ -230,7 +228,6 @@ fun HomeScreen(
             )
         }
 
-        // ── Профиль и контакты ────────────────────────────────────────
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -253,7 +250,6 @@ fun HomeScreen(
             )
         }
 
-        // ── Местоположение ────────────────────────────────────────────
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = MaterialTheme.colorScheme.surface,
@@ -293,7 +289,6 @@ fun HomeScreen(
             }
         }
 
-        // ── Превью SMS (свёрнуто по умолчанию) ────────────────────────
         var smsExpanded by remember { mutableStateOf(false) }
         val arrowRotation by animateFloatAsState(if (smsExpanded) 180f else 0f, label = "arrow")
         Surface(
@@ -360,7 +355,6 @@ private fun ButtonContent(icon: ImageVector, text: String) {
     Text(text = text, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
-/** Короткая плашка-предупреждение в одну строку: по нажатию ведёт к исправлению или закрывается. */
 @Composable
 private fun WarningBanner(
     title: String,

@@ -93,12 +93,10 @@ class BleManager(private val context: Context) {
     private val _deviceError = MutableStateFlow<String?>(null)
     val deviceError: StateFlow<String?> = _deviceError.asStateFlow()
 
-    /** Заряд браслета из последнего события FALL/SOS, -1 если прошивка его не передаёт. */
     @Volatile
     var lastBatteryPercent: Int = -1
         private set
 
-    /** Получает источник тревоги: AlertSource.ESP32_FALL или AlertSource.ESP32_SOS. */
     var onFallDetectedListener: ((String) -> Unit)? = null
 
     private var commandCharacteristic: BluetoothGattCharacteristic? = null
@@ -323,8 +321,6 @@ class BleManager(private val context: Context) {
                 val source = if (type == "SOS") AlertSource.ESP32_SOS else AlertSource.ESP32_FALL
                 val battery = parts.getOrNull(2)?.toIntOrNull() ?: -1
 
-                // Подтверждаем приём ДО фильтрации дублей: прошивка удалит событие
-                // из своей NVS-очереди, даже если приложение уже показало тревогу.
                 if (sequence > 0) sendAck(sequence)
 
                 val now = System.currentTimeMillis()

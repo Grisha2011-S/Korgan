@@ -10,12 +10,6 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 
-/**
- * Громкий циклический сигнал тревоги, который запускается сразу при получении
- * события падения, ещё до того как система покажет экран. Если полноэкранное
- * уведомление запрещено, телефон всё равно разбудит пользователя звуком и
- * вибрацией. Останавливается при открытии экрана тревоги, отмене или отправке.
- */
 object AlarmSoundPlayer {
     private const val TAG = "AlarmSoundPlayer"
     private val vibrationPattern = longArrayOf(0, 700, 300, 700, 300, 1200)
@@ -102,7 +96,6 @@ object AlarmSoundPlayer {
                 audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
             }
         } catch (_: Exception) {
-            // Некоторые прошивки запрещают менять громкость из фона.
         }
     }
 
@@ -130,7 +123,6 @@ object AlarmSoundPlayer {
                 device.vibrate(vibrationPattern, 0)
             }
         } catch (_: Exception) {
-            // Вибрация не критична, если устройство её не поддерживает.
         }
     }
 }

@@ -30,7 +30,6 @@ data class RemoteAlert(
 
 data class SentAlert(val id: String, val linked: Int, val pushed: Int)
 
-/** Thin HTTP client for server/korgan_server.py. All calls run on Dispatchers.IO. */
 class CloudApi(private val baseUrl: String, private val token: String?) {
 
     private val json = "application/json; charset=utf-8".toMediaType()
@@ -39,7 +38,6 @@ class CloudApi(private val baseUrl: String, private val token: String?) {
         (it as JSONObject).optBoolean("ok")
     }
 
-    /** Returns the "device_id.secret" token used for every later call. */
     suspend fun register(role: String, name: String, pushToken: String?): String {
         val body = JSONObject()
             .put("role", role)
