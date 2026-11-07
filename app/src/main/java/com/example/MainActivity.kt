@@ -30,7 +30,11 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Bluetooth as BluetoothOutlined
+import androidx.compose.material.icons.outlined.History as HistoryOutlined
+import androidx.compose.material.icons.outlined.Home as HomeOutlined
+import androidx.compose.material.icons.outlined.Settings as SettingsOutlined
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -63,9 +67,13 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ble.BleStatus
+import com.example.cloud.PhoneRole
 import com.example.i18n.AppStrings
 import com.example.ui.MainViewModel
 import com.example.ui.components.LanguageOnboardingDialog
+import com.example.ui.components.ProfileOnboardingDialog
+import com.example.ui.components.RoleOnboardingDialog
+import com.example.ui.screens.CaregiverAppScreen
 import com.example.ui.screens.BleDevicesScreen
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.HomeScreen
@@ -92,7 +100,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-data class NavTabItem(val title: String, val icon: ImageVector)
+data class NavTabItem(val title: String, val icon: ImageVector, val selectedIcon: ImageVector)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,12 +110,40 @@ fun MainAppScreen(viewModel: MainViewModel) {
     val bleStatus by viewModel.bleStatus.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val strings = AppStrings.get(settings.appLanguage)
+    val family by viewModel.familyCloud.state.collectAsStateWithLifecycle()
+
+    if (!settings.hasCompletedLanguageSetup) {
+        LanguageOnboardingDialog(
+            initialLanguageCode = settings.appLanguage,
+            onConfirm = { selectedCode ->
+                viewModel.updateAppLanguage(selectedCode)
+                viewModel.markLanguageSetupCompleted()
+            }
+        )
+        return
+    }
+
+    when (family.role) {
+        PhoneRole.UNSET -> {
+            RoleOnboardingDialog(
+                languageCode = settings.appLanguage,
+                onConfirm = { viewModel.familyCloud.setRole(it) }
+            )
+            return
+        }
+        PhoneRole.CAREGIVER -> {
+            LaunchedEffect(Unit) { com.example.service.FallDetectionService.stopService(context) }
+            CaregiverAppScreen(viewModel)
+            return
+        }
+        PhoneRole.WEARER -> Unit
+    }
 
     val navTabs = listOf(
-        NavTabItem(strings.tabHome, Icons.Default.Home),
-        NavTabItem(strings.tabBle, Icons.Default.Bluetooth),
-        NavTabItem(strings.tabSettings, Icons.Default.Settings),
-        NavTabItem(strings.tabHistory, Icons.Default.History)
+        NavTabItem(strings.tabHome, Icons.Outlined.HomeOutlined, Icons.Default.Home),
+        NavTabItem(strings.tabBle, Icons.Outlined.BluetoothOutlined, Icons.Default.Bluetooth),
+        NavTabItem(strings.tabSettings, Icons.Outlined.SettingsOutlined, Icons.Default.Settings),
+        NavTabItem(strings.tabHistory, Icons.Outlined.HistoryOutlined, Icons.Default.History)
     )
 
     var permissionsGranted by remember {
@@ -126,32 +162,28 @@ fun MainAppScreen(viewModel: MainViewModel) {
         }
     }
 
-    LaunchedEffect(settings.hasCompletedLanguageSetup) {
-        if (settings.hasCompletedLanguageSetup) {
+    LaunchedEffect(
+        settings.hasCompletedLanguageSetup,
+        settings.hasCompletedProfileSetup
+    ) {
+        // Разрешения и фоновая служба запускаются только после того, как
+        // пользователь выбрал язык и заполнил обязательный профиль.
+        if (settings.hasCompletedLanguageSetup && settings.hasCompletedProfileSetup) {
             if (!permissionsGranted) {
-                val permissionsToRequest = getRequiredPermissions()
-                permissionLauncher.launch(permissionsToRequest)
-            } else {
-                if (viewModel.settings.value.serviceEnabled) {
-                    com.example.service.FallDetectionService.startService(context)
-                }
+                permissionLauncher.launch(getPermissionsToRequest())
+            } else if (viewModel.settings.value.serviceEnabled) {
+                com.example.service.FallDetectionService.startService(context)
             }
         }
     }
 
-    if (!settings.hasCompletedLanguageSetup) {
-        LanguageOnboardingDialog(
-            initialLanguageCode = settings.appLanguage,
-            onConfirm = { selectedCode ->
-                viewModel.updateAppLanguage(selectedCode)
-                viewModel.markLanguageSetupCompleted()
-                if (!permissionsGranted) {
-                    permissionLauncher.launch(getRequiredPermissions())
-                } else {
-                    if (viewModel.settings.value.serviceEnabled) {
-                        com.example.service.FallDetectionService.startService(context)
-                    }
-                }
+    if (!settings.hasCompletedProfileSetup) {
+        ProfileOnboardingDialog(
+            initialName = settings.userName,
+            initialContacts = settings.emergencyContacts,
+            languageCode = settings.appLanguage,
+            onConfirm = { name, contacts ->
+                viewModel.saveProfile(name, contacts)
             }
         )
     }
@@ -183,22 +215,27 @@ fun MainAppScreen(viewModel: MainViewModel) {
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = MaterialTheme.colorScheme.background
                 )
             )
         },
         bottomBar = {
             NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp,
+                tonalElevation = 0.dp,
                 modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
             ) {
                 navTabs.forEachIndexed { index, tab ->
                     NavigationBarItem(
                         selected = selectedTab == index,
                         onClick = { selectedTab = index },
-                        icon = { Icon(imageVector = tab.icon, contentDescription = tab.title) },
-                        label = { Text(tab.title, fontSize = 11.sp, fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal) },
+                        icon = {
+                            Icon(
+                                imageVector = if (selectedTab == index) tab.selectedIcon else tab.icon,
+                                contentDescription = tab.title
+                            )
+                        },
+                        label = { Text(tab.title, fontSize = 11.sp, fontWeight = if (selectedTab == index) FontWeight.SemiBold else FontWeight.Normal) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = PrimaryBlue,
                             indicatorColor = MaterialTheme.colorScheme.primaryContainer
@@ -213,11 +250,17 @@ fun MainAppScreen(viewModel: MainViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            AnimatedVisibility(visible = !permissionsGranted && settings.hasCompletedLanguageSetup) {
+            AnimatedVisibility(
+                visible = !permissionsGranted &&
+                    settings.hasCompletedLanguageSetup &&
+                    settings.hasCompletedProfileSetup
+            ) {
                 Card(
-                    shape = RoundedCornerShape(0.dp),
+                    shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp)
                 ) {
                     Row(
                         modifier = Modifier
@@ -231,7 +274,7 @@ fun MainAppScreen(viewModel: MainViewModel) {
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Icon(imageVector = Icons.Outlined.WarningAmber, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                             Text(
                                 text = strings.permissionWarningBanner,
                                 style = MaterialTheme.typography.bodySmall,
@@ -240,10 +283,10 @@ fun MainAppScreen(viewModel: MainViewModel) {
                         }
                         Button(
                             onClick = {
-                                permissionLauncher.launch(getRequiredPermissions())
+                                permissionLauncher.launch(getPermissionsToRequest())
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(strings.grantPermissionButton, fontSize = 12.sp)
                         }
@@ -283,6 +326,13 @@ private fun getRequiredPermissions(): Array<String> {
     }
     return list.toTypedArray()
 }
+
+/**
+ * CALL_PHONE is requested together with the essential permissions but is not
+ * required for the app to work: without it the dispatcher falls back to the dialer.
+ */
+private fun getPermissionsToRequest(): Array<String> =
+    getRequiredPermissions() + arrayOf(Manifest.permission.CALL_PHONE)
 
 private fun checkAllPermissions(context: android.content.Context): Boolean {
     val permissions = getRequiredPermissions()

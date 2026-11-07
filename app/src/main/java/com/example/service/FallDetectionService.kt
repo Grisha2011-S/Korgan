@@ -17,6 +17,8 @@ import com.example.FallGuardApplication
 import com.example.MainActivity
 import com.example.R
 import com.example.ble.BleStatus
+import com.example.dispatcher.AlertSource
+import com.example.i18n.AppStrings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,6 +51,25 @@ class FallDetectionService : Service() {
                 handleAutoReconnect(status)
             }
         }
+
+        // Страховка на случай, если callback о потере связи был пропущен
+        // после сна/Doze. Раз в 30 секунд проверяем состояние и переподключаемся.
+        serviceScope.launch {
+            while (true) {
+                delay(30_000)
+                val settings = app.preferences.getSettings()
+                val status = app.bleManager.bleStatus.value
+                if (settings.autoReconnect &&
+                    settings.savedBleAddress.isNotBlank() &&
+                    status == BleStatus.DISCONNECTED &&
+                    app.bleManager.hasBluetoothPermission() &&
+                    app.bleManager.isBluetoothEnabled()
+                ) {
+                    app.bleManager.addLog("Плановая проверка связи: переподключение...")
+                    app.bleManager.connectToAddress(settings.savedBleAddress)
+                }
+            }
+        }
     }
 
     private fun handleAutoReconnect(status: BleStatus) {
@@ -69,28 +90,44 @@ class FallDetectionService : Service() {
 
     private fun startForegroundNotification(status: BleStatus) {
         val notification = buildNotification(status)
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-                )
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
-        } catch (e: Exception) {
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             try {
                 startForeground(NOTIFICATION_ID, notification)
-            } catch (e2: Exception) {
-                e2.printStackTrace()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
+            return
+        }
+
+        val serviceType =
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+
+        try {
+            startForeground(NOTIFICATION_ID, notification, serviceType)
+            return
+        } catch (e: Exception) {
+            // На части прошивок location-тип запрещён при старте из фона
+            // (например, после перезагрузки). Тогда работаем без него.
+            android.util.Log.w("FallDetectionService", "startForeground(location) failed", e)
+        }
+
+        try {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            )
+            return
+        } catch (e: Exception) {
+            android.util.Log.w("FallDetectionService", "startForeground(connectedDevice) failed", e)
+        }
+
+        try {
+            startForeground(NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -112,7 +149,8 @@ class FallDetectionService : Service() {
         )
 
         val triggerTestIntent = Intent(this, EmergencyAlertActivity::class.java).apply {
-            putExtra(EmergencyAlertActivity.EXTRA_SOURCE, "NOTIFICATION_TEST")
+            putExtra(EmergencyAlertActivity.EXTRA_SOURCE, AlertSource.NOTIFICATION_TEST)
+            putExtra(EmergencyAlertActivity.EXTRA_IS_TEST, true)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
         val testPendingIntent = PendingIntent.getActivity(
@@ -122,15 +160,18 @@ class FallDetectionService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val app = application as FallGuardApplication
+        val strings = AppStrings.get(app.preferences.getSettings().appLanguage)
+
         val statusText = when (status) {
-            BleStatus.CONNECTED, BleStatus.MONITORING -> "ESP32-C3 на связи • Охрана активна"
-            BleStatus.CONNECTING -> "Подключение к датчику..."
-            BleStatus.SCANNING -> "Поиск устройства ESP32-C3..."
-            BleStatus.DISCONNECTED -> "Датчик не подключен • Ожидание"
+            BleStatus.CONNECTED, BleStatus.MONITORING -> strings.statusEsp32Connected
+            BleStatus.CONNECTING -> strings.statusEsp32Connecting
+            BleStatus.SCANNING -> strings.statusEsp32Scanning
+            BleStatus.DISCONNECTED -> strings.statusEsp32Disconnected
         }
 
         return NotificationCompat.Builder(this, FallGuardApplication.CHANNEL_SERVICE_ID)
-            .setContentTitle("Қорған • Детектор")
+            .setContentTitle("${strings.appTitle} • ${strings.detectorStatusTitle}")
             .setContentText(statusText)
             .setSmallIcon(R.drawable.ic_fall_guard_logo)
             .setContentIntent(pendingIntent)
@@ -138,13 +179,38 @@ class FallDetectionService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(
                 android.R.drawable.ic_dialog_alert,
-                "Тест тревоги",
+                strings.testAlertButton,
                 testPendingIntent
             )
             .build()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val app = application as FallGuardApplication
+        val settings = app.preferences.getSettings()
+        if (!settings.hasCompletedProfileSetup || !settings.serviceEnabled) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // После перезапуска процесса системой (в том числе после перезагрузки
+        // телефона) заново удерживаем CPU и сразу восстанавливаем BLE-связь.
+        try {
+            if (wakeLock?.isHeld != true) {
+                wakeLock?.acquire()
+            }
+        } catch (_: Exception) {}
+
+        val status = app.bleManager.bleStatus.value
+        if (status == BleStatus.DISCONNECTED &&
+            settings.autoReconnect &&
+            settings.savedBleAddress.isNotBlank() &&
+            app.bleManager.hasBluetoothPermission() &&
+            app.bleManager.isBluetoothEnabled()
+        ) {
+            app.bleManager.connectToAddress(settings.savedBleAddress)
+        }
+
         return START_STICKY
     }
 
@@ -163,6 +229,12 @@ class FallDetectionService : Service() {
         private const val NOTIFICATION_ID = 1001
 
         fun startService(context: Context) {
+            val app = context.applicationContext as? FallGuardApplication ?: return
+            val settings = app.preferences.getSettings()
+            if (!settings.hasCompletedProfileSetup || !settings.serviceEnabled) return
+            // Телефон родственника не подключается к браслету.
+            if (app.familyCloud.state.value.role == com.example.cloud.PhoneRole.CAREGIVER) return
+            if (!app.bleManager.hasBluetoothPermission()) return
             try {
                 val intent = Intent(context, FallDetectionService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

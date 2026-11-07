@@ -1,17 +1,44 @@
 package com.example
 
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import com.example.audio.AlarmSoundPlayer
 import com.example.audio.RobotVoiceSpeaker
 import com.example.ble.BleManager
+import com.example.cloud.FamilyCloud
+import com.example.cloud.PhoneRole
 import com.example.data.AppDatabase
 import com.example.data.UserPreferences
+import com.example.dispatcher.AlertSource
+import com.example.dispatcher.DispatchResult
 import com.example.dispatcher.EmergencyDispatcher
 import com.example.location.LocationHelper
 import com.example.service.FallDetectionService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+data class EmergencyDispatchState(
+    val id: Long,
+    val source: String,
+    val isTest: Boolean,
+    val inProgress: Boolean,
+    val result: DispatchResult?
+)
 
 class FallGuardApplication : Application() {
 
@@ -27,6 +54,100 @@ class FallGuardApplication : Application() {
         private set
     lateinit var dispatcher: EmergencyDispatcher
         private set
+    lateinit var familyCloud: FamilyCloud
+        private set
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var nextDispatchId = 0L
+    private var alertWatchdog: Job? = null
+    private var alertHandled = false
+    private val _dispatchState = MutableStateFlow<EmergencyDispatchState?>(null)
+    val dispatchState: StateFlow<EmergencyDispatchState?> = _dispatchState.asStateFlow()
+
+    /**
+     * Реакция на событие падения/нажатия SOS.
+     *
+     * Одновременно:
+     *  - запускается громкий циклический сигнал (он разбудит, даже если
+     *    полноэкранное уведомление запрещено);
+     *  - показывается экран тревоги;
+     *  - взводится страховочный таймер. Если система не дала открыть экран,
+     *    через таймер отмены + 20 секунд SMS/звонок всё равно будут отправлены.
+     */
+    fun onFallAlert(source: String, isTest: Boolean = false) {
+        resetDispatchIfFinished()
+        familyCloud.clearLiveAlert()
+        alertHandled = false
+        AlarmSoundPlayer.start(this)
+
+        alertWatchdog?.cancel()
+        val settings = preferences.getSettings()
+        val fallbackDelayMs =
+            (settings.countdownSeconds.toLong() + 20L).coerceAtLeast(30L) * 1000L
+
+        alertWatchdog = appScope.launch {
+            delay(fallbackDelayMs)
+            if (!alertHandled && dispatchState.value == null) {
+                android.util.Log.w(
+                    "FallGuardApplication",
+                    "Экран тревоги не появился за $fallbackDelayMs мс — отправляю тревогу в фоне"
+                )
+                startDispatch(source, isTest)
+            }
+        }
+    }
+
+    /** Экран тревоги показан, отменён или отправка уже запущена. */
+    fun onAlertHandled() {
+        alertHandled = true
+        alertWatchdog?.cancel()
+        alertWatchdog = null
+        AlarmSoundPlayer.stop()
+    }
+
+    /** Проверка полного пути тревоги, включая звук и страховочную отправку. */
+    fun triggerTestAlert() {
+        onFallAlert(AlertSource.NOTIFICATION_TEST, isTest = true)
+        EmergencyAlertActivity.launch(
+            this,
+            source = AlertSource.NOTIFICATION_TEST,
+            isTest = true
+        )
+    }
+
+    /**
+     * Runs the emergency protocol in an application-scoped coroutine so that
+     * activity recreation (rotation, screen off) neither cancels nor duplicates it.
+     */
+    fun startDispatch(source: String, isTest: Boolean = false): Long {
+        val current = _dispatchState.value
+        if (current?.inProgress == true) return current.id
+
+        val id = ++nextDispatchId
+        _dispatchState.value = EmergencyDispatchState(id, source, isTest, true, null)
+        appScope.launch {
+            val result = try {
+                dispatcher.executeEmergencyProtocol(source, isTest)
+            } catch (e: Exception) {
+                android.util.Log.e("FallGuardApplication", "Emergency dispatch failed", e)
+                null
+            }
+            _dispatchState.value = EmergencyDispatchState(id, source, isTest, false, result)
+            AlarmSoundPlayer.stop()
+            // Если экран так и не открылся, не оставляем вечно висящую
+            // полноэкранную тревогу после фактической отправки.
+            EmergencyAlertActivity.cancelAlertNotification(this@FallGuardApplication)
+        }
+        return id
+    }
+
+    /** Clears a finished dispatch so the next alert starts with a fresh countdown. */
+    fun resetDispatchIfFinished() {
+        if (_dispatchState.value?.inProgress != true) {
+            _dispatchState.value = null
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -37,24 +158,44 @@ class FallGuardApplication : Application() {
         locationHelper = LocationHelper(this, preferences)
         robotVoiceSpeaker = RobotVoiceSpeaker(this)
         bleManager = BleManager(this)
+        familyCloud = FamilyCloud(this).apply {
+            wearerNameProvider = { preferences.getSettings().userName }
+            migrateRole(preferences.getSettings().hasCompletedProfileSetup)
+        }
         dispatcher = EmergencyDispatcher(
             context = this,
             preferences = preferences,
             locationHelper = locationHelper,
             robotVoiceSpeaker = robotVoiceSpeaker,
-            database = database
+            database = database,
+            familyCloud = familyCloud,
+            batteryProvider = { bleManager.lastBatteryPercent }
         )
 
         createNotificationChannels()
 
-        bleManager.onFallDetectedListener = {
-            EmergencyAlertActivity.launch(this, source = "ESP32_BLE")
+        bleManager.onFallDetectedListener = { source ->
+            val safeSource = if (source == AlertSource.ESP32_SOS) {
+                AlertSource.ESP32_SOS
+            } else {
+                AlertSource.ESP32_FALL
+            }
+            mainHandler.post {
+                onFallAlert(safeSource)
+                EmergencyAlertActivity.launch(this, source = safeSource)
+            }
         }
 
-        locationHelper.requestSingleUpdate()
-
-        if (preferences.getSettings().serviceEnabled && hasRequiredPermissionsForService()) {
-            FallDetectionService.startService(this)
+        // До завершения обязательного онбординга приложение не запускает
+        // фоновую службу и не использует геолокацию.
+        familyCloud.syncInBackground()
+        val settings = preferences.getSettings()
+        // Телефон родственника не подключается к браслету и не следит за геолокацией.
+        if (settings.hasCompletedProfileSetup && familyCloud.state.value.role == PhoneRole.WEARER) {
+            locationHelper.requestSingleUpdate()
+            if (settings.serviceEnabled && hasRequiredPermissionsForService()) {
+                FallDetectionService.startService(this)
+            }
         }
     }
 
@@ -80,26 +221,51 @@ class FallGuardApplication : Application() {
                 setShowBadge(false)
             }
 
+            val alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val alarmAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
             val alertChannel = NotificationChannel(
                 CHANNEL_ALERT_ID,
                 "Экстренная тревога (Падение)",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Срочные уведомления при обнаружении падения"
+                description = "Полноэкранная тревога со звуком будильника при падении или SOS"
                 enableVibration(true)
-                vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500)
+                vibrationPattern = longArrayOf(0, 700, 300, 700, 300, 1200)
                 setBypassDnd(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                enableLights(true)
+                lightColor = android.graphics.Color.RED
+                if (alarmSound != null) {
+                    setSound(alarmSound, alarmAttributes)
+                }
+            }
+
+            val infoChannel = NotificationChannel(
+                CHANNEL_INFO_ID,
+                "Ответы родственников",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Родственник получил тревогу и едет; новые связки телефонов"
             }
 
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(serviceChannel)
             manager.createNotificationChannel(alertChannel)
+            manager.createNotificationChannel(infoChannel)
         }
     }
 
     companion object {
         const val CHANNEL_SERVICE_ID = "fall_service_channel"
-        const val CHANNEL_ALERT_ID = "fall_alert_channel"
+        // Новый ID важен: существующий канал нельзя повысить программно,
+        // если пользователь ранее изменил его важность.
+        const val CHANNEL_ALERT_ID = "fall_alert_channel_v2"
+        const val CHANNEL_INFO_ID = "family_info_channel"
 
         lateinit var instance: FallGuardApplication
             private set

@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,20 +12,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cancel
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.Call
+import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.MarkChatRead
+import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.PersonalInjury
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Science
+import androidx.compose.material.icons.outlined.Sos
+import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,12 +43,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.AlertEvent
+import com.example.dispatcher.AlertSource
 import com.example.i18n.AppStrings
 import com.example.ui.MainViewModel
+import com.example.ui.components.IconBadge
 import com.example.ui.theme.EmergencyRed
 import com.example.ui.theme.StatusConnected
 import java.text.SimpleDateFormat
@@ -65,8 +69,8 @@ fun HistoryScreen(
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
+            icon = { Icon(Icons.Outlined.DeleteSweep, contentDescription = null) },
             title = { Text(strings.clearHistoryButton) },
-            text = { Text(strings.emptyHistory) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -89,32 +93,25 @@ fun HistoryScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(imageVector = Icons.Default.History, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Text(
-                    text = "${strings.historyTitle} (${events.size})",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
+            Text(
+                text = strings.historyTitle,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
             if (events.isNotEmpty()) {
                 IconButton(onClick = { showClearDialog = true }) {
                     Icon(
-                        imageVector = Icons.Default.Delete,
+                        imageVector = Icons.Outlined.DeleteSweep,
                         contentDescription = strings.clearHistoryButton,
-                        tint = MaterialTheme.colorScheme.error
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -122,37 +119,24 @@ fun HistoryScreen(
 
         if (events.isEmpty()) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = StatusConnected,
-                        modifier = Modifier.size(56.dp)
-                    )
+                    IconBadge(icon = Icons.Outlined.VerifiedUser, tint = StatusConnected, size = 88.dp)
                     Text(
                         text = strings.noRecentEvents,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Text(
-                        text = strings.emptyHistory,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
                 }
             }
         } else {
             LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(events, key = { it.id }) { event ->
@@ -163,109 +147,109 @@ fun HistoryScreen(
     }
 }
 
+/** Компактная строка события; подробности (телефон, текст звонка) — по нажатию. */
 @Composable
 fun EventCard(event: AlertEvent, strings: com.example.i18n.Translations) {
-    val dateFormat = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.getDefault())
+    val dateFormat = remember { SimpleDateFormat("dd.MM  HH:mm", Locale.getDefault()) }
     val formattedDate = dateFormat.format(Date(event.timestamp))
+    var expanded by remember { mutableStateOf(false) }
 
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        modifier = Modifier.fillMaxWidth()
+    val (icon, tint) = when (event.source) {
+        AlertSource.ESP32_FALL -> Icons.Outlined.PersonalInjury to EmergencyRed
+        AlertSource.ESP32_SOS -> Icons.Outlined.Sos to EmergencyRed
+        AlertSource.MANUAL_TEST,
+        AlertSource.NOTIFICATION_TEST -> Icons.Outlined.Science to MaterialTheme.colorScheme.primary
+        else -> Icons.Outlined.NotificationsActive to MaterialTheme.colorScheme.primary
+    }
+    val (statusIcon, statusTint) = when (event.status) {
+        "SMS_SENT" -> Icons.Outlined.MarkChatRead to StatusConnected
+        "SMS_PARTIAL" -> Icons.Outlined.ErrorOutline to Color(0xFFF59E0B)
+        "CANCELLED" -> Icons.Outlined.Block to MaterialTheme.colorScheme.onSurfaceVariant
+        else -> Icons.Outlined.Schedule to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .clickable { expanded = !expanded }
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(
-                                when (event.status) {
-                                    "SMS_SENT" -> EmergencyRed
-                                    "CANCELLED" -> StatusConnected
-                                    else -> MaterialTheme.colorScheme.primary
-                                }
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = when (event.status) {
-                                "SMS_SENT" -> Icons.Default.Send
-                                "CANCELLED" -> Icons.Default.Cancel
-                                else -> Icons.Default.Warning
-                            },
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-
+                IconBadge(icon = icon, tint = tint, size = 40.dp)
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = when (event.source) {
-                            "ESP32_BLE" -> strings.eventTypeFall
-                            "MANUAL_TEST" -> strings.eventTypeTest
+                            AlertSource.ESP32_FALL -> strings.eventTypeFall
+                            AlertSource.ESP32_SOS -> strings.eventTypeSos
+                            AlertSource.MANUAL_TEST,
+                            AlertSource.NOTIFICATION_TEST -> strings.eventTypeTest
                             else -> event.source
                         },
                         style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = event.addressText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = if (expanded) 4 else 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-
-                Text(
-                    text = formattedDate,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = formattedDate,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Icon(
+                        imageVector = statusIcon,
+                        contentDescription = event.status,
+                        tint = statusTint,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.LocationOn,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = event.addressText,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            if (event.contactPhone.isNotBlank()) {
-                Text(
-                    text = "${strings.recipientLabel} ${event.contactPhone} (${event.userName})",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = "\"${event.spokenMessage}\"",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(8.dp)
-                )
+            AnimatedVisibility(visible = expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (event.contactPhone.isNotBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Call,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(text = event.contactPhone, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (event.spokenMessage.isNotBlank()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = event.spokenMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
     }

@@ -9,6 +9,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
@@ -20,6 +21,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.example.dispatcher.AlertSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -88,7 +90,21 @@ class BleManager(private val context: Context) {
     private val _signalRssi = MutableStateFlow<Int?>(null)
     val signalRssi: StateFlow<Int?> = _signalRssi.asStateFlow()
 
-    var onFallDetectedListener: (() -> Unit)? = null
+    private val _deviceError = MutableStateFlow<String?>(null)
+    val deviceError: StateFlow<String?> = _deviceError.asStateFlow()
+
+    /** Заряд браслета из последнего события FALL/SOS, -1 если прошивка его не передаёт. */
+    @Volatile
+    var lastBatteryPercent: Int = -1
+        private set
+
+    /** Получает источник тревоги: AlertSource.ESP32_FALL или AlertSource.ESP32_SOS. */
+    var onFallDetectedListener: ((String) -> Unit)? = null
+
+    private var commandCharacteristic: BluetoothGattCharacteristic? = null
+    private var subscriptionsReady = false
+    private var lastEventSeq = 0L
+    private var lastEventTime = 0L
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -106,7 +122,9 @@ class BleManager(private val context: Context) {
             val isEsp = name.contains("esp", ignoreCase = true) ||
                     name.contains("c3", ignoreCase = true) ||
                     name.contains("fall", ignoreCase = true) ||
-                    name.contains("guard", ignoreCase = true)
+                    name.contains("guard", ignoreCase = true) ||
+                    name.contains("korgan", ignoreCase = true) ||
+                    name.contains("қорған", ignoreCase = true)
 
             val current = _discoveredDevices.value.toMutableList()
             val existingIndex = current.indexOfFirst { it.address == address }
@@ -134,13 +152,18 @@ class BleManager(private val context: Context) {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 _bleStatus.value = BleStatus.CONNECTED
+                _deviceError.value = null
+                commandCharacteristic = null
+                subscriptionsReady = false
+                lastEventSeq = 0L
+                lastEventTime = 0L
                 val name = try { gatt.device.name ?: "ESP32-C3" } catch (_: Exception) { "ESP32-C3" }
                 val addr = gatt.device.address
                 _connectedDeviceName.value = name
                 _connectedDeviceAddress.value = addr
                 addLog("Подключено к: $name ($addr)")
                 addLog("Поиск GATT сервисов...")
-                
+
                 mainHandler.postDelayed({
                     try {
                         gatt.discoverServices()
@@ -153,6 +176,9 @@ class BleManager(private val context: Context) {
                 _connectedDeviceName.value = null
                 _connectedDeviceAddress.value = null
                 _signalRssi.value = null
+                commandCharacteristic = null
+                subscriptionsReady = false
+                _deviceError.value = null
                 descriptorQueue.clear()
                 isWritingDescriptor = false
                 addLog("Отключено от BLE устройства (код $status)")
@@ -165,6 +191,12 @@ class BleManager(private val context: Context) {
                 addLog("Сервисы найдены (${gatt.services.size} шт). Настройка подписки...")
                 descriptorQueue.clear()
                 isWritingDescriptor = false
+                subscriptionsReady = false
+
+                commandCharacteristic = findCommandCharacteristic(gatt)
+                if (commandCharacteristic == null) {
+                    addLog("Не найдена характеристика для отправки команд (ACK/PING)")
+                }
 
                 var foundTarget = false
                 for (service in gatt.services) {
@@ -189,8 +221,7 @@ class BleManager(private val context: Context) {
                 if (foundTarget) {
                     processNextDescriptor(gatt)
                 } else {
-                    _bleStatus.value = BleStatus.MONITORING
-                    addLog("Внимание: сервис подключен (без дескрипторов)")
+                    onSubscriptionsReady()
                 }
 
                 try {
@@ -210,11 +241,24 @@ class BleManager(private val context: Context) {
             isWritingDescriptor = false
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 addLog("Подписка активна для: ${descriptor.characteristic?.uuid}")
-                _bleStatus.value = BleStatus.MONITORING
             } else {
                 addLog("Ошибка записи дескриптора (${descriptor.characteristic?.uuid}): $status")
             }
             processNextDescriptor(gatt)
+            if (descriptorQueue.isEmpty() && !isWritingDescriptor) {
+                onSubscriptionsReady()
+            }
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onCharacteristicWrite(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                addLog("Ошибка записи команды (${characteristic.uuid}): $status")
+            }
         }
 
         @Deprecated("Deprecated in Java")
@@ -265,16 +309,134 @@ class BleManager(private val context: Context) {
 
     private fun processIncomingData(data: ByteArray?) {
         if (data == null || data.isEmpty()) return
-        val text = String(data).trim()
+        val text = String(data, Charsets.UTF_8).trim()
+        if (text.isEmpty()) return
         _lastReceivedPacket.value = text
         addLog("RX: \"$text\"")
 
-        if (text.contains("fall", ignoreCase = true)) {
-            addLog("ТРЕВОГА: ПОЛУЧЕНА КОМАНДА 'FALL' ОТ ESP32!")
-            mainHandler.post {
-                onFallDetectedListener?.invoke()
+        val parts = text.split(":", limit = 4)
+        val type = parts.firstOrNull()?.trim()?.uppercase(Locale.US).orEmpty()
+        val sequence = parts.getOrNull(1)?.trim()?.toLongOrNull() ?: 0L
+
+        when {
+            type == "FALL" || type == "SOS" || text.contains("fall", ignoreCase = true) -> {
+                val source = if (type == "SOS") AlertSource.ESP32_SOS else AlertSource.ESP32_FALL
+                val battery = parts.getOrNull(2)?.toIntOrNull() ?: -1
+
+                // Подтверждаем приём ДО фильтрации дублей: прошивка удалит событие
+                // из своей NVS-очереди, даже если приложение уже показало тревогу.
+                if (sequence > 0) sendAck(sequence)
+
+                val now = System.currentTimeMillis()
+                val isDuplicate = if (sequence > 0) {
+                    sequence <= lastEventSeq
+                } else {
+                    now - lastEventTime < EVENT_DEDUP_WINDOW_MS
+                }
+                if (isDuplicate) {
+                    addLog("Повтор события #$sequence проигнорирован")
+                    return
+                }
+                if (sequence > 0) lastEventSeq = sequence
+                lastEventTime = now
+
+                val kind = if (source == AlertSource.ESP32_SOS) "SOS" else "падение"
+                if (battery in 0..100) lastBatteryPercent = battery
+                val batteryText = if (battery in 0..100) ", батарея $battery%" else ""
+                addLog("ТРЕВОГА: $kind от ESP32 (seq=$sequence$batteryText)")
+                mainHandler.post { onFallDetectedListener?.invoke(source) }
+            }
+            type == "PONG" -> addLog("ESP32 ответил на проверку связи")
+            type == "READY" -> {
+                _deviceError.value = null
+                addLog("ESP32 готов к работе")
+            }
+            type == "INFO" -> {
+                _deviceError.value = null
+                addLog("Информация от ESP32: $text")
+            }
+            type == "ERROR" && parts.getOrNull(1)?.uppercase(Locale.US) == "SENSOR" -> {
+                _deviceError.value = DEVICE_ERROR_SENSOR
+                addLog("ОШИБКА: датчик MPU6050 не отвечает")
+            }
+            type == "ACK" -> addLog("ESP32 подтвердил событие #${parts.getOrNull(1)}")
+            type == "CAL" -> addLog("Калибровка ESP32: ${parts.getOrNull(1) ?: "?"}")
+            else -> addLog("Неизвестный пакет: $text")
+        }
+    }
+
+    private fun findCommandCharacteristic(gatt: BluetoothGatt): BluetoothGattCharacteristic? {
+        val direct = gatt.getService(ESP32_CUSTOM_SERVICE_UUID)
+            ?.getCharacteristic(ESP32_CUSTOM_CHAR_UUID)
+        if (direct != null) return direct
+
+        for (service in gatt.services) {
+            for (characteristic in service.characteristics) {
+                val properties = characteristic.properties
+                val writable = (properties and (
+                    BluetoothGattCharacteristic.PROPERTY_WRITE or
+                        BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE
+                    )) != 0
+                val notifiable = (properties and (
+                    BluetoothGattCharacteristic.PROPERTY_NOTIFY or
+                        BluetoothGattCharacteristic.PROPERTY_INDICATE
+                    )) != 0
+                if (writable && notifiable) return characteristic
             }
         }
+        return null
+    }
+
+    private fun onSubscriptionsReady() {
+        if (subscriptionsReady) return
+        subscriptionsReady = true
+        _bleStatus.value = BleStatus.MONITORING
+        addLog("Мониторинг запущен. Проверка связи с ESP32...")
+        sendCommand("PING")
+    }
+
+    private fun sendAck(sequence: Long) {
+        if (sequence <= 0) return
+        val sent = sendCommand("ACK:$sequence")
+        if (sent) {
+            addLog("TX ACK:$sequence")
+        } else {
+            addLog("Не удалось отправить ACK:$sequence")
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun sendCommand(command: String): Boolean {
+        val gatt = bluetoothGatt ?: return false
+        val characteristic = commandCharacteristic ?: return false
+        if (isWritingDescriptor) {
+            addLog("Команда $command отложена: идёт настройка подписки")
+            return false
+        }
+
+        return try {
+            val payload = command.toByteArray(Charsets.UTF_8)
+            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                gatt.writeCharacteristic(
+                    characteristic,
+                    payload,
+                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                ) == BluetoothStatusCodes.SUCCESS
+            } else {
+                @Suppress("DEPRECATION")
+                characteristic.value = payload
+                @Suppress("DEPRECATION")
+                gatt.writeCharacteristic(characteristic)
+            }
+        } catch (e: Exception) {
+            addLog("Ошибка отправки команды $command: ${e.message}")
+            false
+        }
+    }
+
+    fun clearDeviceError() {
+        _deviceError.value = null
     }
 
     fun hasBluetoothPermission(): Boolean {
@@ -396,13 +558,16 @@ class BleManager(private val context: Context) {
         _connectedDeviceName.value = null
         _connectedDeviceAddress.value = null
         _signalRssi.value = null
+        commandCharacteristic = null
+        subscriptionsReady = false
+        _deviceError.value = null
     }
 
     fun triggerSimulatedFall() {
-        addLog("[ТЕСТ] Симуляция команды 'Fall' от ESP32-C3")
-        _lastReceivedPacket.value = "Fall"
+        addLog("[ТЕСТ] Симуляция падения от ESP32-C3")
+        _lastReceivedPacket.value = "FALL:0"
         mainHandler.post {
-            onFallDetectedListener?.invoke()
+            onFallDetectedListener?.invoke(AlertSource.ESP32_FALL)
         }
     }
 
@@ -421,5 +586,10 @@ class BleManager(private val context: Context) {
 
     fun clearLogs() {
         _logs.value = emptyList()
+    }
+
+    companion object {
+        const val DEVICE_ERROR_SENSOR = "SENSOR"
+        private const val EVENT_DEDUP_WINDOW_MS = 5_000L
     }
 }

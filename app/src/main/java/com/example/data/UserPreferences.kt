@@ -5,13 +5,17 @@ import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.UUID
 
 data class UserSettings(
     val appLanguage: String = "ru",
     val hasCompletedLanguageSetup: Boolean = false,
-    val userName: String = "Алексей",
-    val contactPhone: String = "+79991234567",
-    val customTemplate: String = "Здравствуйте! {имя} упал и не может встать, находится {адрес}!",
+    val userName: String = "",
+    val emergencyContacts: List<EmergencyContact> = emptyList(),
+    val hasCompletedProfileSetup: Boolean = false,
+    val customTemplate: String = DefaultTemplates.RU,
     val countdownSeconds: Int = 10,
     val autoSpeakerphone: Boolean = true,
     val sendSms: Boolean = true,
@@ -22,7 +26,15 @@ data class UserSettings(
     val savedBleName: String = "",
     val autoReconnect: Boolean = true,
     val serviceEnabled: Boolean = true
-)
+) {
+    /** Первый корректный номер — используется для экстренного звонка. */
+    val contactPhone: String
+        get() = emergencyContacts.firstOrNull { isValidPhoneNumber(it.phone) }?.phone
+            ?: emergencyContacts.firstOrNull()?.phone.orEmpty()
+
+    val validContacts: List<EmergencyContact>
+        get() = emergencyContacts.filter { isValidPhoneNumber(it.phone) }
+}
 
 class UserPreferences(context: Context) {
     private val prefs: SharedPreferences =
@@ -32,15 +44,28 @@ class UserPreferences(context: Context) {
     val settingsFlow: StateFlow<UserSettings> = _settingsFlow.asStateFlow()
 
     private fun loadSettings(): UserSettings {
+        val language = prefs.getString(KEY_APP_LANGUAGE, "ru") ?: "ru"
+        val name = prefs.getString(KEY_USER_NAME, "") ?: ""
+        val contacts = loadContacts()
+        val storedProfileCompleted = prefs.getBoolean(KEY_PROFILE_SETUP_COMPLETED, false)
+        val profileIsUsable = storedProfileCompleted &&
+            name.isNotBlank() &&
+            contacts.any { isValidPhoneNumber(it.phone) }
+
+        val storedTemplate = prefs.getString(KEY_CUSTOM_TEMPLATE, null)
+        val template = if (storedTemplate.isNullOrBlank() || storedTemplate in DefaultTemplates.allKnown()) {
+            DefaultTemplates.forLanguage(language)
+        } else {
+            storedTemplate
+        }
+
         return UserSettings(
-            appLanguage = prefs.getString(KEY_APP_LANGUAGE, "ru") ?: "ru",
+            appLanguage = language,
             hasCompletedLanguageSetup = prefs.getBoolean(KEY_LANGUAGE_SETUP_COMPLETED, false),
-            userName = prefs.getString(KEY_USER_NAME, "Алексей") ?: "Алексей",
-            contactPhone = prefs.getString(KEY_CONTACT_PHONE, "+79991234567") ?: "+79991234567",
-            customTemplate = prefs.getString(
-                KEY_CUSTOM_TEMPLATE,
-                "Здравствуйте! {имя} упал и не может встать, находится {адрес}!"
-            ) ?: "Здравствуйте! {имя} упал и не может встать, находится {адрес}!",
+            userName = name,
+            emergencyContacts = contacts,
+            hasCompletedProfileSetup = profileIsUsable,
+            customTemplate = template,
             countdownSeconds = prefs.getInt(KEY_COUNTDOWN_SECONDS, 10),
             autoSpeakerphone = prefs.getBoolean(KEY_AUTO_SPEAKERPHONE, true),
             sendSms = prefs.getBoolean(KEY_SEND_SMS, true),
@@ -54,22 +79,56 @@ class UserPreferences(context: Context) {
         )
     }
 
+    private fun loadContacts(): List<EmergencyContact> {
+        val json = prefs.getString(KEY_CONTACTS_JSON, null)
+        if (!json.isNullOrBlank()) {
+            val parsed = decodeContacts(json)
+            if (parsed.isNotEmpty()) return parsed
+        }
+
+        // Миграция со старой версии, где был один номер без имени.
+        val legacyPhone = (prefs.getString(KEY_CONTACT_PHONE, "") ?: "").trim()
+        if (legacyPhone.isNotBlank()) {
+            val migrated = listOf(EmergencyContact(name = "", phone = legacyPhone))
+            prefs.edit()
+                .putString(KEY_CONTACTS_JSON, encodeContacts(migrated))
+                .remove(KEY_CONTACT_PHONE)
+                .apply()
+            return migrated
+        }
+        return emptyList()
+    }
+
     fun getSettings(): UserSettings = _settingsFlow.value
+
+    /** Сохраняет результат обязательного первичного заполнения профиля. */
+    fun saveProfile(name: String, contacts: List<EmergencyContact>) {
+        val cleanName = name.trim()
+        val cleanContacts = contacts
+            .map { it.copy(name = it.name.trim(), phone = it.phone.trim()) }
+            .filter { it.name.isNotBlank() || it.phone.isNotBlank() }
+        val isValid = cleanName.isNotBlank() && cleanContacts.any { isValidPhoneNumber(it.phone) }
+
+        prefs.edit()
+            .putString(KEY_USER_NAME, cleanName)
+            .putString(KEY_CONTACTS_JSON, encodeContacts(cleanContacts))
+            .putBoolean(KEY_PROFILE_SETUP_COMPLETED, isValid)
+            .remove(KEY_CONTACT_PHONE)
+            .apply()
+
+        _settingsFlow.value = _settingsFlow.value.copy(
+            userName = cleanName,
+            emergencyContacts = cleanContacts,
+            hasCompletedProfileSetup = isValid
+        )
+    }
 
     fun updateAppLanguage(lang: String, markSetupCompleted: Boolean = true) {
         val current = _settingsFlow.value
-        val defaultTemplates = listOf(
-            "Здравствуйте! {имя} упал и не может встать, находится {адрес}!",
-            "Сәлеметсіз бе! {имя} құлап қалды және тұра алмайды, мекенжайы: {адрес}!",
-            "Hello! {name} has fallen and cannot get up, located at {address}!"
-        )
-
-        val newTemplate = if (current.customTemplate in defaultTemplates || current.customTemplate.isBlank()) {
-            when (lang) {
-                "kk" -> "Сәлеметсіз бе! {имя} құлап қалды және тұра алмайды, мекенжайы: {адрес}!"
-                "en" -> "Hello! {name} has fallen and cannot get up, located at {address}!"
-                else -> "Здравствуйте! {имя} упал и не может встать, находится {адрес}!"
-            }
+        val newTemplate = if (current.customTemplate.isBlank() ||
+            current.customTemplate in DefaultTemplates.allKnown()
+        ) {
+            DefaultTemplates.forLanguage(lang)
         } else {
             current.customTemplate
         }
@@ -80,7 +139,7 @@ class UserPreferences(context: Context) {
             .putString(KEY_CUSTOM_TEMPLATE, newTemplate)
             .apply()
 
-        _settingsFlow.value = _settingsFlow.value.copy(
+        _settingsFlow.value = current.copy(
             appLanguage = lang,
             hasCompletedLanguageSetup = markSetupCompleted,
             customTemplate = newTemplate
@@ -92,14 +151,22 @@ class UserPreferences(context: Context) {
         _settingsFlow.value = _settingsFlow.value.copy(hasCompletedLanguageSetup = true)
     }
 
+    /**
+     * Не обрезает пробелы: иначе нельзя набрать имя из двух слов или номер
+     * с пробелами. Нормализация выполняется при сохранении и отправке.
+     */
     fun updateUserName(name: String) {
-        prefs.edit().putString(KEY_USER_NAME, name.trim()).apply()
-        _settingsFlow.value = _settingsFlow.value.copy(userName = name.trim())
+        prefs.edit().putString(KEY_USER_NAME, name).apply()
+        _settingsFlow.value = _settingsFlow.value.copy(userName = name)
     }
 
-    fun updateContactPhone(phone: String) {
-        prefs.edit().putString(KEY_CONTACT_PHONE, phone.trim()).apply()
-        _settingsFlow.value = _settingsFlow.value.copy(contactPhone = phone.trim())
+    fun updateEmergencyContacts(contacts: List<EmergencyContact>) {
+        val clean = contacts.filter { it.name.isNotBlank() || it.phone.isNotBlank() }
+        prefs.edit()
+            .putString(KEY_CONTACTS_JSON, encodeContacts(clean))
+            .remove(KEY_CONTACT_PHONE)
+            .apply()
+        _settingsFlow.value = _settingsFlow.value.copy(emergencyContacts = clean)
     }
 
     fun updateCustomTemplate(template: String) {
@@ -170,11 +237,46 @@ class UserPreferences(context: Context) {
         _settingsFlow.value = _settingsFlow.value.copy(serviceEnabled = enabled)
     }
 
+    private fun encodeContacts(contacts: List<EmergencyContact>): String {
+        val array = JSONArray()
+        contacts.forEach { contact ->
+            if (contact.name.isBlank() && contact.phone.isBlank()) return@forEach
+            array.put(
+                JSONObject().apply {
+                    put("id", contact.id)
+                    put("name", contact.name)
+                    put("phone", contact.phone)
+                }
+            )
+        }
+        return array.toString()
+    }
+
+    private fun decodeContacts(json: String): List<EmergencyContact> {
+        return try {
+            val array = JSONArray(json)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val name = item.optString("name", "")
+                    val phone = item.optString("phone", "")
+                    if (name.isBlank() && phone.isBlank()) continue
+                    val id = item.optString("id", "").ifBlank { UUID.randomUUID().toString() }
+                    add(EmergencyContact(id = id, name = name, phone = phone))
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     companion object {
         private const val KEY_APP_LANGUAGE = "app_language"
         private const val KEY_LANGUAGE_SETUP_COMPLETED = "language_setup_completed"
+        private const val KEY_PROFILE_SETUP_COMPLETED = "profile_setup_completed"
         private const val KEY_USER_NAME = "user_name"
         private const val KEY_CONTACT_PHONE = "contact_phone"
+        private const val KEY_CONTACTS_JSON = "emergency_contacts_json"
         private const val KEY_CUSTOM_TEMPLATE = "custom_template"
         private const val KEY_COUNTDOWN_SECONDS = "countdown_seconds"
         private const val KEY_AUTO_SPEAKERPHONE = "auto_speakerphone"

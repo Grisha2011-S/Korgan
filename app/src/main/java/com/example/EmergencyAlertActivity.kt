@@ -57,10 +57,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,16 +76,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.audio.AlarmSoundPlayer
+import com.example.dispatcher.AlertSource
+import com.example.dispatcher.DispatchStatus
 import com.example.i18n.AppStrings
 import com.example.ui.theme.EmergencyRed
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.StatusConnected
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 class EmergencyAlertActivity : ComponentActivity() {
 
     private var vibrator: Vibrator? = null
+
+    private var alertSource by mutableStateOf(AlertSource.ESP32_FALL)
+    private var alertIsTest by mutableStateOf(false)
+    private var alertGeneration by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -115,24 +122,49 @@ class EmergencyAlertActivity : ComponentActivity() {
         }
 
         val app = application as FallGuardApplication
-        val source = intent.getStringExtra(EXTRA_SOURCE) ?: "ESP32_BLE"
+        readAlertIntent(intent)
 
         setContent {
             MyApplicationTheme(darkTheme = true) {
-                EmergencyAlertScreen(
-                    app = app,
-                    source = source,
-                    onCancel = {
-                        stopVibration()
-                        app.robotVoiceSpeaker.stop()
-                        finish()
-                    },
-                    onDispatched = {
-                        stopVibration()
-                    }
-                )
+                key(alertGeneration) {
+                    EmergencyAlertScreen(
+                        app = app,
+                        source = alertSource,
+                        isTest = alertIsTest,
+                        onCancel = {
+                            stopVibration()
+                            app.onAlertHandled()
+                            app.robotVoiceSpeaker.stop()
+                            cancelAlertNotification(this@EmergencyAlertActivity)
+                            finish()
+                        },
+                        onDispatched = {
+                            stopVibration()
+                            app.onAlertHandled()
+                            cancelAlertNotification(this@EmergencyAlertActivity)
+                        }
+                    )
+                }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        (application as FallGuardApplication).resetDispatchIfFinished()
+        readAlertIntent(intent)
+        // Экран уже открыт: дальше работает вибрация самого экрана, а не
+        // фоновый сигнал. Иначе звук наложится на новый отсчёт.
+        AlarmSoundPlayer.stop()
+        startVibration()
+        // Recreates the screen state so a new fall restarts the countdown.
+        alertGeneration++
+    }
+
+    private fun readAlertIntent(intent: Intent?) {
+        alertSource = intent?.getStringExtra(EXTRA_SOURCE) ?: AlertSource.ESP32_FALL
+        alertIsTest = intent?.getBooleanExtra(EXTRA_IS_TEST, false) ?: false
     }
 
     private fun startVibration() {
@@ -155,6 +187,9 @@ class EmergencyAlertActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Экран тревоги сам вибрирует и отсчитывает время, поэтому фоновый
+        // циклический сигнал больше не нужен.
+        AlarmSoundPlayer.stop()
         startVibration()
     }
 
@@ -170,9 +205,25 @@ class EmergencyAlertActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_SOURCE = "extra_alert_source"
+        const val EXTRA_IS_TEST = "extra_alert_is_test"
         const val ALERT_NOTIFICATION_ID = 999
+        const val SOURCE_BLE = AlertSource.ESP32_FALL
+        const val SOURCE_SOS = AlertSource.ESP32_SOS
 
-        fun launch(context: Context, source: String = "ESP32_BLE") {
+        fun cancelAlertNotification(context: Context) {
+            try {
+                val manager =
+                    context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                manager?.cancel(ALERT_NOTIFICATION_ID)
+            } catch (_: Exception) {
+            }
+        }
+
+        fun launch(
+            context: Context,
+            source: String = AlertSource.ESP32_FALL,
+            isTest: Boolean = false
+        ) {
             try {
                 val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
                 @Suppress("DEPRECATION")
@@ -185,8 +236,13 @@ class EmergencyAlertActivity : ComponentActivity() {
                 wakeLock?.acquire(30_000L)
             } catch (_: Exception) {}
 
+            val app = context.applicationContext as? FallGuardApplication
+            // A new alert must start with a clean countdown, unless a dispatch is still running.
+            app?.resetDispatchIfFinished()
+
             val intent = Intent(context, EmergencyAlertActivity::class.java).apply {
                 putExtra(EXTRA_SOURCE, source)
+                putExtra(EXTRA_IS_TEST, isTest)
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_CLEAR_TOP or
                         Intent.FLAG_ACTIVITY_SINGLE_TOP or
@@ -203,18 +259,49 @@ class EmergencyAlertActivity : ComponentActivity() {
             try {
                 val notificationManager =
                     context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                val alertNotification = NotificationCompat.Builder(context, FallGuardApplication.CHANNEL_ALERT_ID)
+                val strings = AppStrings.get(app?.preferences?.getSettings()?.appLanguage ?: "ru")
+
+                // Since Android 14, full-screen intents must be explicitly allowed by the user.
+                val canUseFullScreenIntent =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        notificationManager?.canUseFullScreenIntent() == true
+                    } else {
+                        true
+                    }
+
+                val isSos = source == AlertSource.ESP32_SOS
+                val builder = NotificationCompat.Builder(context, FallGuardApplication.CHANNEL_ALERT_ID)
                     .setSmallIcon(R.drawable.ic_fall_guard_logo)
-                    .setContentTitle("ТРЕВОГА: ЗАФИКСИРОВАНО ПАДЕНИЕ!")
-                    .setContentText("ESP32 зафиксировал падение. Отправка SMS через несколько секунд...")
+                    .setContentTitle(
+                        when {
+                            isTest -> strings.testModeHeader
+                            isSos -> strings.sosDetectedHeader
+                            else -> strings.fallDetectedHeader
+                        }
+                    )
+                    .setContentText(
+                        when {
+                            isTest -> strings.testModeSubtitle
+                            isSos -> strings.sosDetectedSubtitle
+                            else -> strings.sensorDetectedSubtitle
+                        }
+                    )
                     .setPriority(NotificationCompat.PRIORITY_MAX)
                     .setCategory(NotificationCompat.CATEGORY_ALARM)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                    .setFullScreenIntent(pendingIntent, true)
-                    .setAutoCancel(true)
-                    .build()
+                    .setContentIntent(pendingIntent)
+                    .setWhen(System.currentTimeMillis())
+                    .setShowWhen(true)
+                    // Тревога не должна исчезнуть от случайного свайпа. Она
+                    // снимается только после отмены или отправки SMS/звонка.
+                    .setOngoing(true)
+                    .setAutoCancel(false)
 
-                notificationManager?.notify(ALERT_NOTIFICATION_ID, alertNotification)
+                if (canUseFullScreenIntent) {
+                    builder.setFullScreenIntent(pendingIntent, true)
+                }
+
+                notificationManager?.notify(ALERT_NOTIFICATION_ID, builder.build())
             } catch (_: Exception) {}
 
             try {
@@ -228,17 +315,47 @@ class EmergencyAlertActivity : ComponentActivity() {
 fun EmergencyAlertScreen(
     app: FallGuardApplication,
     source: String,
+    isTest: Boolean,
     onCancel: () -> Unit,
     onDispatched: () -> Unit
 ) {
     val settings by app.preferences.settingsFlow.collectAsStateWithLifecycle()
     val locationInfo by app.locationHelper.locationState.collectAsStateWithLifecycle()
+    val dispatchState by app.dispatchState.collectAsStateWithLifecycle()
+    val liveAppAlert by app.familyCloud.liveAlert.collectAsStateWithLifecycle()
     val strings = AppStrings.get(settings.appLanguage)
+    val familyStrings = com.example.i18n.FamilyText.get(settings.appLanguage)
+    val validContacts = settings.validContacts
 
-    var secondsLeft by remember { mutableIntStateOf(settings.countdownSeconds) }
-    var isDispatched by remember { mutableStateOf(false) }
-    var dispatchedMessage by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
+    var secondsLeft by rememberSaveable { mutableIntStateOf(settings.countdownSeconds) }
+    var isDispatched by rememberSaveable {
+        mutableStateOf(app.dispatchState.value != null)
+    }
+
+    val result = dispatchState?.result
+    val resultStatus = result?.status
+    val finishedWithoutResult = dispatchState?.let { !it.inProgress && it.result == null } == true
+    val outcomeIsError = finishedWithoutResult ||
+        resultStatus == DispatchStatus.NO_CONTACT ||
+        resultStatus == DispatchStatus.FAILED
+    val outcomeIsPartial = resultStatus == DispatchStatus.SMS_PARTIAL
+    val ackedBy = result?.appAckedBy ?: liveAppAlert?.ackedByName
+    val outcomeText = when {
+        finishedWithoutResult -> strings.dispatchFailed
+        ackedBy != null -> familyStrings.appAcked.format(ackedBy)
+        resultStatus == DispatchStatus.APP_SENT -> familyStrings.appDelivered
+        dispatchState?.inProgress == true && liveAppAlert != null -> familyStrings.appWaitingAck
+        resultStatus == DispatchStatus.TEST -> strings.dispatchTestComplete
+        resultStatus == DispatchStatus.NO_CONTACT -> strings.dispatchNoContact
+        resultStatus == DispatchStatus.FAILED -> strings.dispatchFailed
+        resultStatus == DispatchStatus.SMS_SENT -> strings.smsSentSuccessCard
+        resultStatus == DispatchStatus.SMS_PARTIAL ->
+            strings.smsSentPartial.format(result?.sentCount ?: 0, result?.totalCount ?: 0)
+        resultStatus == DispatchStatus.CALL_STARTED -> strings.dispatchCallStarted
+        isDispatched -> strings.dispatchInProgress
+        else -> null
+    }
+    val isSos = source == AlertSource.ESP32_SOS
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
@@ -258,22 +375,33 @@ fun EmergencyAlertScreen(
                 delay(1000)
                 secondsLeft -= 1
             }
-            if (secondsLeft <= 0 && !isDispatched) {
+            if (!isDispatched) {
                 isDispatched = true
                 onDispatched()
-                scope.launch {
-                    val msg = app.dispatcher.executeEmergencyProtocol(source)
-                    dispatchedMessage = msg
-                }
+                app.startDispatch(source, isTest)
             }
         }
     }
 
-    val liveMessagePreview = remember(settings.userName, locationInfo.address, settings.customTemplate) {
-        app.dispatcher.buildEmergencyPhrase(
+    val liveMessagePreview = remember(
+        source,
+        settings.userName,
+        locationInfo.address,
+        locationInfo.latitude,
+        locationInfo.longitude,
+        locationInfo.accuracy,
+        settings.customTemplate,
+        settings.appLanguage
+    ) {
+        app.dispatcher.buildSmsMessage(
+            source = source,
             userName = settings.userName,
             address = locationInfo.address,
-            customTemplate = settings.customTemplate
+            latitude = locationInfo.latitude,
+            longitude = locationInfo.longitude,
+            accuracyMeters = locationInfo.accuracy,
+            customTemplate = settings.customTemplate,
+            languageCode = settings.appLanguage
         )
     }
 
@@ -312,7 +440,14 @@ fun EmergencyAlertScreen(
                 }
 
                 Text(
-                    text = if (isDispatched) strings.alertSentHeader else strings.fallDetectedHeader,
+                    text = when {
+                        isTest -> strings.testModeHeader
+                        outcomeIsError -> strings.alertNotSentHeader
+                        outcomeIsPartial -> strings.alertPartiallySentHeader
+                        isDispatched -> strings.alertSentHeader
+                        isSos -> strings.sosDetectedHeader
+                        else -> strings.fallDetectedHeader
+                    },
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Black,
                     color = EmergencyRed,
@@ -320,10 +455,12 @@ fun EmergencyAlertScreen(
                 )
 
                 Text(
-                    text = if (isDispatched)
-                        strings.smsSentSubtitle
-                    else
-                        strings.sensorDetectedSubtitle,
+                    text = when {
+                        isDispatched -> outcomeText ?: strings.dispatchInProgress
+                        isTest -> strings.testModeSubtitle
+                        isSos -> strings.sosDetectedSubtitle
+                        else -> strings.sensorDetectedSubtitle
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.White.copy(alpha = 0.8f),
                     textAlign = TextAlign.Center
@@ -362,10 +499,15 @@ fun EmergencyAlertScreen(
                     }
                 }
             } else {
+                val cardColor = when {
+                    outcomeIsError -> EmergencyRed
+                    outcomeIsPartial -> Color(0xFFFFB74D)
+                    else -> StatusConnected
+                }
                 Card(
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = StatusConnected.copy(alpha = 0.15f)),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, StatusConnected),
+                    colors = CardDefaults.cardColors(containerColor = cardColor.copy(alpha = 0.15f)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, cardColor),
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 16.dp)
@@ -375,14 +517,25 @@ fun EmergencyAlertScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Icon(imageVector = Icons.Default.CheckCircle, contentDescription = null, tint = StatusConnected)
+                        Icon(
+                            imageVector = if (outcomeIsError || outcomeIsPartial) {
+                                Icons.Default.Warning
+                            } else {
+                                Icons.Default.CheckCircle
+                            },
+                            contentDescription = null,
+                            tint = cardColor
+                        )
                         Column {
                             Text(
-                                text = strings.smsSentSuccessCard,
+                                text = outcomeText ?: strings.dispatchInProgress,
                                 fontWeight = FontWeight.Bold,
-                                color = StatusConnected
+                                color = cardColor
                             )
-                            if (settings.enableCallAndVoice) {
+                            if (!outcomeIsError && settings.enableCallAndVoice &&
+                                (resultStatus == DispatchStatus.SMS_SENT ||
+                                    resultStatus == DispatchStatus.SMS_PARTIAL)
+                            ) {
                                 Text(
                                     text = strings.callAndVoiceActiveCard,
                                     style = MaterialTheme.typography.bodySmall,
@@ -409,11 +562,41 @@ fun EmergencyAlertScreen(
                     ) {
                         Icon(Icons.Default.Person, contentDescription = null, tint = EmergencyRed, modifier = Modifier.size(18.dp))
                         Text(
-                            text = "${strings.recipientLabel} ${settings.contactPhone.ifBlank { strings.recipientNotSet }}",
+                            text = strings.recipientsLabel,
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp
                         )
+                    }
+
+                    if (validContacts.isEmpty()) {
+                        Text(
+                            text = strings.recipientNotSet,
+                            color = EmergencyRed,
+                            fontSize = 12.sp
+                        )
+                    } else {
+                        validContacts.forEach { contact ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 26.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = contact.displayName,
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    text = contact.phone,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
                     }
 
                     Row(
@@ -454,10 +637,7 @@ fun EmergencyAlertScreen(
                         onClick = {
                             isDispatched = true
                             onDispatched()
-                            scope.launch {
-                                val msg = app.dispatcher.executeEmergencyProtocol(source)
-                                dispatchedMessage = msg
-                            }
+                            app.startDispatch(source, isTest)
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = EmergencyRed),
                         shape = RoundedCornerShape(14.dp),

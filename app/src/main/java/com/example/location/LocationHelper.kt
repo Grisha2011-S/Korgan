@@ -216,6 +216,8 @@ class LocationHelper(
         }
     }
 
+    // Permission is verified by hasLocationPermission() below and all failures are caught.
+    @SuppressLint("MissingPermission")
     suspend fun getCurrentAddressDirectly(): String = withContext(Dispatchers.IO) {
         val langCode = preferences?.getSettings()?.appLanguage ?: "ru"
         val strings = AppStrings.get(langCode)

@@ -14,6 +14,7 @@ import com.example.ble.BleStatus
 import com.example.ble.DiscoveredDevice
 import com.example.data.AlertEvent
 import com.example.data.AppDatabase
+import com.example.data.EmergencyContact
 import com.example.data.UserPreferences
 import com.example.data.UserSettings
 import com.example.dispatcher.EmergencyDispatcher
@@ -35,6 +36,7 @@ class MainViewModel(
     val locationHelper: LocationHelper = app.locationHelper
     val robotVoiceSpeaker: RobotVoiceSpeaker = app.robotVoiceSpeaker
     val dispatcher: EmergencyDispatcher = app.dispatcher
+    val familyCloud: com.example.cloud.FamilyCloud = app.familyCloud
     private val database: AppDatabase = app.database
 
     val settings: StateFlow<UserSettings> = preferences.settingsFlow
@@ -44,6 +46,7 @@ class MainViewModel(
     val signalRssi: StateFlow<Int?> = bleManager.signalRssi
     val discoveredDevices: StateFlow<List<DiscoveredDevice>> = bleManager.discoveredDevices
     val bleLogs: StateFlow<List<String>> = bleManager.logs
+    val deviceError: StateFlow<String?> = bleManager.deviceError
     val locationInfo: StateFlow<LocationInfo> = locationHelper.locationState
     val isSpeaking: StateFlow<Boolean> = robotVoiceSpeaker.isSpeaking
 
@@ -68,8 +71,16 @@ class MainViewModel(
         preferences.updateUserName(name)
     }
 
-    fun updateContactPhone(phone: String) {
-        preferences.updateContactPhone(phone)
+    fun saveProfile(name: String, contacts: List<EmergencyContact>) {
+        preferences.saveProfile(name, contacts)
+    }
+
+    fun updateEmergencyContacts(contacts: List<EmergencyContact>) {
+        preferences.updateEmergencyContacts(contacts)
+    }
+
+    fun clearDeviceError() {
+        bleManager.clearDeviceError()
     }
 
     fun updateCustomTemplate(template: String) {
